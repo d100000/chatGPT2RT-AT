@@ -1,0 +1,53 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>{{ seo.title }}</title>
+  {% include "seo_meta.html" %}
+  <link rel="stylesheet" href="{{ url_for('static', filename='app.css') }}">
+  <link rel="stylesheet" href="{{ url_for('static', filename='docs.css') }}">
+  <script type="application/ld+json" nonce="{{ structured_nonce }}">{{ structured_data | tojson }}</script>
+</head>
+<body class="docs-page">
+  <a class="skip-link" href="#docs-content">跳到文档正文</a>
+  <header class="docs-header">
+    <a class="brand" href="/docs" aria-label="bob ai工具文档首页"><span class="brand-mark" aria-hidden="true">bob</span><span class="brand-name">bob AI 工具<small>使用文档</small></span></a>
+    <nav class="docs-tools" aria-label="工具与源代码">
+      <a href="/">Token 获取</a><a href="/converter">格式转换</a><a href="/network">IP 检测</a>
+      <a href="{{ repository_url }}" target="_blank" rel="noopener noreferrer">GitHub <span aria-hidden="true">↗</span></a>
+    </nav>
+  </header>
+  <div class="docs-layout">
+    <aside class="docs-sidebar" aria-label="文档导航">
+      <p class="eyebrow">BOB AI · DOCS</p>
+      <nav><ul>{% for item in doc_pages %}<li><a href="{{ item.path }}"{% if item.slug == page.slug %} aria-current="page"{% endif %}>{{ item.label }}</a></li>{% endfor %}</ul></nav>
+      <p class="docs-sidebar-note">源码公开 · 独立项目<br>仅用于已有授权账号</p>
+    </aside>
+    <main id="docs-content" class="docs-article" tabindex="-1">
+      <article aria-labelledby="docs-title">
+        <header class="docs-intro">
+          <p class="docs-breadcrumb"><a href="/docs">使用文档</a>{% if page.slug %}<span aria-hidden="true">/</span><span>{{ page.label }}</span>{% endif %}</p>
+          <h1 id="docs-title">{{ page.heading }}</h1>
+          <p class="docs-answer">{{ page.answer }}</p>
+        </header>
+        <nav class="docs-toc" aria-label="本文目录"><span>本页内容</span><ul>{% for section in page.sections %}<li><a href="#{{ section.anchor }}">{{ section.heading }}</a></li>{% endfor %}</ul></nav>
+        {% for section in page.sections %}
+        <section class="docs-section" aria-labelledby="{{ section.anchor }}">
+          <h2 id="{{ section.anchor }}">{{ section.heading }}</h2>
+          {% for paragraph in section.paragraphs %}<p>{{ paragraph }}</p>{% endfor %}
+          {% if section.bullets %}<ul>{% for bullet in section.bullets %}<li>{{ bullet }}</li>{% endfor %}</ul>{% endif %}
+          {% if section.rows %}<div class="docs-table-scroll" tabindex="0" role="region" aria-label="{{ section.heading }}，可横向滚动"><table><thead><tr>{% for column in section.columns %}<th scope="col">{{ column }}</th>{% endfor %}</tr></thead><tbody>{% for row in section.rows %}<tr>{% for value in row %}<td>{{ value }}</td>{% endfor %}</tr>{% endfor %}</tbody></table></div>{% endif %}
+        </section>
+        {% endfor %}
+        <footer class="docs-related"><h2>继续阅读</h2><ul>{% for item in doc_pages %}{% if item.slug != page.slug %}<li><a href="{{ item.path }}">{{ item.title }} <span aria-hidden="true">→</span></a></li>{% endif %}{% endfor %}</ul></footer>
+      </article>
+    </main>
+  </div>
+  <footer class="docs-footer">
+    <p>Bob AI，只做最靠谱的 AI。</p>
+    <p><strong>来源与维护：</strong>功能和保存方式以<a href="{{ repository_url }}" target="_blank" rel="noopener noreferrer">源码仓库与维护说明</a>为准；凭据概念参考<a href="https://www.rfc-editor.org/rfc/rfc6749" target="_blank" rel="noopener noreferrer">OAuth 2.0（RFC 6749）</a>与<a href="https://openid.net/specs/openid-connect-core-1_0.html#IDToken" target="_blank" rel="noopener noreferrer">OpenID Connect Core</a>。</p>
+    <p>Token 获取结果保存在运行服务的设备；格式转换在浏览器内存中处理。</p>
+  </footer>
+</body>
+</html>

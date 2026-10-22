@@ -10,6 +10,7 @@ FORM: User-authorized reorganization of the existing workbench; compact navigati
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <meta name="rt-csrf" content="{{ csrf_token }}">
   <title>{% block title %}首页{% endblock %} · bob ai工具</title>
+  {% include "seo_meta.html" %}
   <link rel="stylesheet" href="{{ url_for('static', filename='app.css') }}">
   {% block styles %}{% endblock %}
   <script type="module" src="{{ url_for('static', filename='workspace.js') }}"></script>
@@ -37,7 +38,7 @@ FORM: User-authorized reorganization of the existing workbench; compact navigati
       <div class="network-summary-quality"><strong id="network-summary-score">—</strong><span id="network-summary-label">等待风险结果</span></div>
       <a class="network-source-link" href="https://ipok.io/" target="_blank" rel="noopener noreferrer">IPOK 检测来源 <span aria-hidden="true">↗</span></a>
     </section>
-    <div class="sidebar-foot"><span class="status-dot" aria-hidden="true"></span>本地运行 · 凭据由你保管</div>
+    <div class="sidebar-foot"><span class="status-dot" aria-hidden="true"></span>本地运行 · 凭据由你保管 <a href="/docs">使用文档</a></div>
   </aside>
   <div class="app-main">
     <header class="shell-bar"><div class="shell-location"><span>bob ai工具</span><span aria-hidden="true">/</span><strong>{% block tool_name %}{% endblock %}</strong></div><div class="connection" id="connection"><span class="status-dot" aria-hidden="true"></span><span id="connection-label">{% block connection_label %}本地工作空间{% endblock %}</span></div></header>

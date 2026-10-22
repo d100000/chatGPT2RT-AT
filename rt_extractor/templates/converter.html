@@ -1,13 +1,13 @@
 {% extends "base.html" %}
 {% set active_page = "converter" %}
-{% block title %}格式转换{% endblock %}
+{% block title %}CPA ↔ Sub2API 格式转换{% endblock %}
 {% block page_id %}converter{% endblock %}
 {% block tool_name %}格式转换{% endblock %}
 {% block connection_label %}浏览器本地转换{% endblock %}
 {% block workspace_class %}converter-workspace{% endblock %}
 {% block scripts %}<script type="module" src="{{ url_for('static', filename='converter-ui.mjs') }}"></script>{% endblock %}
 {% block content %}
-    <div class="page-heading"><div><p class="eyebrow">FORMAT CONVERSION</p><h1>认证文件，按需互转</h1><p class="page-description">载入提取结果或导入已有 JSON，在 CPA 与 Sub2API 之间转换。</p></div><span class="local-badge">浏览器本地处理</span></div>
+    <div class="page-heading"><div><p class="eyebrow">FORMAT CONVERSION</p><h1>CPA ↔ Sub2API 认证文件转换</h1><p class="page-description">载入提取结果或导入已有 JSON，在 CPA 与 Sub2API 之间转换。</p></div><span class="local-badge">浏览器本地处理</span></div>
     {% include "privacy_notice.html" %}
     <div class="converter-toolbar"><div class="converter-mode" role="group" aria-label="转换方向">
       <button id="mode-cpa" class="mode-button" type="button" aria-pressed="true">CPA → Sub2API</button>

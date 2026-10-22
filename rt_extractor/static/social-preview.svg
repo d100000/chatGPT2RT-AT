@@ -1,0 +1,18 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1200" height="630" viewBox="0 0 1200 630" role="img" aria-labelledby="title desc">
+  <title id="title">bob ai工具 · ChatGPT Token 提取与格式转换</title>
+  <desc id="desc">支持已有授权账号提取 RT、AT、ID Token，以及 CPA 与 Sub2API 格式转换。非 OpenAI 官方项目。</desc>
+  <rect width="1200" height="630" fill="#f5f7fc"/>
+  <rect x="44" y="44" width="1112" height="542" rx="24" fill="#fff" stroke="#dce3f1"/>
+  <rect x="90" y="90" width="70" height="70" rx="16" fill="#1948df"/>
+  <g font-family="Arial, 'PingFang SC', 'Microsoft YaHei', sans-serif">
+    <text x="125" y="136" text-anchor="middle" font-size="27" font-weight="700" fill="#fff">bob</text>
+    <text x="182" y="137" font-size="31" font-weight="700" fill="#26344d">bob ai工具</text>
+    <text x="90" y="236" font-size="48" font-weight="700" fill="#182841">ChatGPT Token 提取</text>
+    <text x="90" y="302" font-size="37" fill="#1948df" font-weight="700">RT · AT · ID Token</text>
+    <line x1="90" y1="344" x2="1110" y2="344" stroke="#e5eaf4"/>
+    <text x="90" y="401" font-size="28" font-weight="600" fill="#26344d">CPA ↔ Sub2API 格式转换</text>
+    <text x="90" y="450" font-size="23" fill="#596983">已有授权账号 · Python / CLI · 本地工作台</text>
+    <text x="90" y="537" font-size="19" fill="#68758a">github.com/d100000/chatGPT2RT-AT</text>
+    <text x="1110" y="537" text-anchor="end" font-size="18" fill="#68758a">非 OpenAI 官方项目</text>
+  </g>
+</svg>

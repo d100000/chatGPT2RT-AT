@@ -1,0 +1,90 @@
+# ChatGPT Token 提取指南：获取 RT、AT 和 ID Token
+
+**bob ai工具通过登录已有授权账号取得 AT、RT 和 ID Token，并将结果保存到运行工具的设备。** 网页可批量处理账号，CLI 和 Python API 每次处理一个账号。已有认证文件只需转换格式时，可直接使用转换页，不必重新登录。
+
+本指南说明当前项目的功能，不表示 OpenAI 官方支持或保证登录成功。平台登录要求、账号验证、凭据撤销和接口变化都可能影响结果。
+
+## 先区分三个操作
+
+| 操作 | 是否登录认证服务 | 是否产生新的认证结果 | 本项目支持情况 |
+| --- | --- | --- | --- |
+| 提取 RT / AT | 是，使用已有账号并完成要求的验证 | 登录成功后保存收到的三类 Token | 网页、CLI、Python API |
+| 复制或下载已提取结果 | 否 | 否，只读取保存的结果 | RT 查看 / 复制、JSON、TXT、ZIP |
+| CPA ↔ Sub2API 转换 | 否，整理已有认证字段 | 否，不刷新 Token | 浏览器本地转换 |
+
+提取 RT 不等于让 RT 永久有效。该项目不提供 RT 自动续期，也不会为账号创建 OpenAI API Key。AT 的到期字段不能当作 RT 到期时间。
+
+## 1. 在自己控制的设备上启动
+
+需要 Python 3.10+，推荐 Python 3.12。macOS / Linux 命令：
+
+```bash
+git clone https://github.com/d100000/chatGPT2RT-AT.git
+cd chatGPT2RT-AT
+python3 -m venv .venv
+.venv/bin/python -m pip install '.[web]'
+.venv/bin/python -m rt_extractor.web --port 8765 --output-dir output
+```
+
+在该设备的浏览器中打开 [http://127.0.0.1:8765](http://127.0.0.1:8765)。Windows 将解释器路径替换为 `.venv\Scripts\python.exe`。服务器默认仅接受本机访问；远程自用可通过 [SSH 隧道](../SECURITY.md#服务器使用边界)保持这一边界。
+
+## 2. 导入账号并完成验证
+
+网页每行使用 `邮箱----密码----2FA密钥`，中间为四个英文短横线。以下均为占位值：
+
+```text
+you@example.com----YOUR_PASSWORD----YOUR_BASE32_SECRET
+```
+
+网页支持 Base32 密钥或 `otpauth://totp/` URI，仅接受 SHA1、六位动态码、30 秒周期；设备时间需要准确。2FA 密钥用于生成动态码，不能跳过认证服务另行要求的邮箱或其他验证。
+
+- 每批最多 1000 个账号、2 MiB 文本；支持粘贴或 UTF-8 `.txt` 导入。
+- 默认同时处理 2 个账号，可选 1～3 个。等待验证码的账号仍占用一个名额。
+- 格式有误、密钥无效或邮箱重复时，整批不会启动。邮箱重复判断不区分大小写。
+- 登录代理在“连接设置”填写。该代理只影响 Python 登录请求，不改变浏览器的 IP 检测出口。
+
+点击开始后查看账号状态。额外邮箱验证码须在对应账号的表单中提交，不能用其他账号的验证码代替。手机号验证要求不会由本项目自动完成。
+
+## 3. 判断是否提取成功
+
+只有 AT、RT、ID Token 均存在，账号才会标记成功。状态为失败或取消时，不应把它解释为“部分 Token 已可用”；应以界面错误和实际成功输出为准。
+
+成功后可使用“查看 RT”按需读取、复制并关闭隐藏。下载结果包括：
+
+| 结果 | 用途 |
+| --- | --- |
+| 原始 JSON | 保存 AT、RT、ID Token、取得时间、AT 到期时间及可用账号元数据 |
+| CPA JSON / CPA ZIP | 将成功账号整理为 CPA 认证文件，批次可打包 |
+| Sub2API JSON | 合并成功账号为 `sub2api-data` v1 文档 |
+| RT 文本 | 每行一个成功账号的 RT |
+| 原始结果 ZIP | 成功账号原始 JSON，以及记录批次状态的 manifest |
+
+这些输出包含登录凭据，应按凭据管理，不能放入公开 Issue、截图、搜索页面或 Git 仓库。元数据来自 Token claims，不代表本工具验证了签名、平台权限或当前认证状态。
+
+## 4. 明确文件保存在哪里
+
+使用上面的启动命令时，结果写入 `output/`；不指定 `--output-dir` 时默认 `rt-output/`。每个成功账号会自动保存原始、CPA、Sub2API JSON；批次结束后还会自动生成成功账号的 CPA ZIP 与合并 Sub2API JSON。
+
+文件为明文 JSON，使用原子写入，POSIX 权限为 `0600`。关闭浏览器、七天声明到期或重启服务都不会自动删除已经写出的文件。服务器运行工具时，结果保存在服务器，不是在访问者的浏览器里；凭据也会经运行该工具的服务处理。
+
+纯格式转换不上传导入的认证内容，也不写入浏览器持久化存储。这个范围不能扩展为“Token 获取不经过服务器”或“所有数据均不保存”。详见 [数据与隐私](../README.md#使用声明与隐私)。
+
+## 单账号脚本调用
+
+```bash
+.venv/bin/python -m rt_extractor --email you@example.com --output tokens.json
+```
+
+CLI 隐藏输入密码和 2FA 密钥；密钥留空时，可在提示出现后输入当前动态码。无需网页的安装可使用 `.venv/bin/python -m pip install .`。无交互 JSON 输入、环境变量及 Python 示例见 [CLI / Python 完整说明](../README.md#命令行与-python-接口)。
+
+`extract_tokens(...)` 只返回内存中的 `TokenBundle`，不写文件；`extract_and_save(...)` 则会保存。公开 Python API 不会替调用方提供任务队列、多用户隔离或分布式限流。
+
+## 失败时从哪里排查
+
+1. 输入两行却仍显示零条、按钮不能点击：先排查 JavaScript 加载，见[模板与脚本版本不一致](MAINTAINERS.md#module-loading)。
+2. HTTP 429：按 `Retry-After` 等待；不要通过自动重提密码或验证码绕过限制。
+3. 验证码失败：确认账号、挑战和动态码未过期，查看页面提示。
+4. 网络失败或超时：检查运行设备的网络与登录代理；浏览器 IP 评分不能证明 Python 的出口相同。
+5. 认证协议变化：保留脱敏错误、版本与复现步骤报告问题，不上传完整响应体或凭据。
+
+继续阅读：[常见问题](FAQ.md) · [安全策略](../SECURITY.md) · [项目 README](../README.md) · [SEO / GEO 方案](SEO-GEO-PLAN.md)

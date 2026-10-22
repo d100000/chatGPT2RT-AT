@@ -5,13 +5,19 @@ build-backend = "setuptools.build_meta"
 [project]
 name = "account-rt-extractor"
 version = "0.1.0"
-description = "Standalone account password and TOTP login with complete OAuth token export"
+description = "ChatGPT token extractor for RT, AT and ID Token, with CPA and Sub2API conversion"
 readme = "README.md"
 requires-python = ">=3.10"
 dependencies = ["httpx[socks]>=0.28,<1", "curl_cffi>=0.7,<1"]
 
 [project.optional-dependencies]
 web = ["flask>=3.1,<4"]
+
+[project.urls]
+Homepage = "https://tools.bob-api.com/"
+Repository = "https://github.com/d100000/chatGPT2RT-AT"
+Documentation = "https://github.com/d100000/chatGPT2RT-AT#readme"
+Issues = "https://github.com/d100000/chatGPT2RT-AT/issues"
 
 [project.scripts]
 rt-extractor = "rt_extractor.__main__:main"
@@ -22,5 +28,5 @@ packages = ["rt_extractor", "rt_extractor._protocol"]
 license-files = ["THIRD_PARTY_NOTICES.md"]
 
 [tool.setuptools.package-data]
-"rt_extractor" = ["templates/*.html", "static/*.css", "static/*.js", "static/*.mjs"]
+"rt_extractor" = ["templates/*.html", "static/*.css", "static/*.js", "static/*.mjs", "static/*.png", "static/*.svg"]
 "rt_extractor._protocol" = ["*.js"]

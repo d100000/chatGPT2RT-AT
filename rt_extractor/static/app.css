@@ -63,7 +63,9 @@ svg { display: block; fill: none; stroke: currentColor; stroke-width: 1.7; strok
 [data-risk-level="unknown"] .network-summary-quality strong, [data-risk-level="unknown"] .network-quality strong { color: var(--muted); }
 .network-source-link { display: flex; align-items: center; justify-content: space-between; min-height: 40px; color: var(--muted); font-size: 11px; margin-top: 5px; }
 .network-source-link:hover { color: var(--blue); }
-.sidebar-foot { display: flex; align-items: center; gap: 7px; margin-top: var(--space-md); color: var(--muted); font-size: 10px; }
+.sidebar-foot { display: flex; flex-wrap: wrap; align-items: center; gap: 7px; margin-top: var(--space-md); color: var(--muted); font-size: 10px; }
+.sidebar-foot a { display: inline-flex; align-items: center; flex-basis: 100%; min-height: var(--control-height); color: var(--blue); }
+.sidebar-foot a:hover { text-decoration: underline; }
 .app-main { margin-left: var(--sidebar-width); min-width: 0; }
 .shell-bar { min-height: var(--shell-height); padding: 0 var(--space-xl); display: flex; align-items: center; justify-content: space-between; gap: var(--space-md); background: var(--paper); border-bottom: 1px solid var(--rule); }
 .shell-location { display: flex; align-items: center; gap: var(--space-sm); color: var(--muted); font-size: 12px; }

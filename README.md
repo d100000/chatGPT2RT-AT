@@ -1,17 +1,39 @@
-# bob ai工具
+# bob ai工具：ChatGPT / GPT Token 提取（RT、AT、ID Token）
 
 **Bob AI，只做最靠谱的 AI。**
 
-[GitHub 开源地址](https://github.com/d100000/chatGPT2RT-AT) · [作者邮箱](mailto:bbo_dong@qq.com) · QQ 群：**916444032**
+[简体中文](README.md) · [English](README.en.md) · [项目网站](https://tools.bob-api.com/) · [GitHub 源码](https://github.com/d100000/chatGPT2RT-AT)
 
-一个面向已有 ChatGPT 账号的本地工作台，包含 **Token 获取、CPA ↔ Sub2API 格式转换、IP 纯净度检测**。输入邮箱、密码和 Authenticator 2FA 密钥后，保存完整 **AT、RT 和 ID Token**，并自动生成 CPA 与 Sub2API 文件；也支持处理已有认证文件、命令行和 Python 调用。
+**bob ai工具用于登录已有且获授权的 ChatGPT 账号，提取 Refresh Token（RT）、Access Token（AT）和 ID Token，并导出原始 JSON、CPA 与 Sub2API 文件。** 项目同时提供浏览器本地格式转换和 IP 纯净度检测，支持网页、单账号命令行及 Python API。
 
-三个工具采用统一的蓝白界面，左上角显示“bob AI 工具”并提供开源地址。首次进入时展示全站使用声明，确认或关闭后 7 天内不重复提示；声明说明实际数据处理方式，并提供源码链接和 QQ 群号复制。详见[使用声明与隐私](#使用声明与隐私)。
+这是独立开发的非官方工具，与 OpenAI 无隶属或背书关系。这里的“GPT 提取 Token”“提取 RT / AT”指账号登录后的认证结果，**不是创建 OpenAI API Key**；格式转换不会刷新 Token，也不保证凭据仍有效。提取结果会保存到运行工具的设备，服务器部署时该设备就是服务器。源码公开，主项目许可证状态见[来源与许可](#来源与许可)。
+
+| 你要完成的事 | 对应功能 | 说明文档 |
+| --- | --- | --- |
+| 获取 ChatGPT RT、AT 和 ID Token | Token 获取：网页批量、CLI / Python 单账号 | [Token 提取指南](docs/TOKEN-GUIDE.md) |
+| 转换已有 CPA / Sub2API 认证 JSON | CPA ↔ Sub2API 浏览器本地转换 | [转换与字段映射](#cpa--sub2api-格式转换) |
+| 了解当前浏览器出口的风险证据 | IPOK IP 纯净度检测 | [IP 检测说明](#ip-纯净度检测) |
 
 ```text
 邮箱 + 密码 + 2FA → 登录验证 → 获取 AT / RT / ID Token → 原始 JSON / Sub2API / CPA
 已有认证 JSON → 浏览器本地转换 → CPA 单文件 / CPA ZIP / Sub2API JSON
 ```
+
+## 文档导航
+
+[快速开始](#快速开始) · [RT / AT 术语](#token-types) · [输入格式](#账号输入格式) · [结果与下载](#查看结果与下载) · [CLI / Python](#命令行与-python-接口) · [隐私与保存](#使用声明与隐私) · [防刷策略](SECURITY.md) · [常见问题](docs/FAQ.md) · [维护与更新](docs/MAINTAINERS.md) · [SEO / GEO 方案](docs/SEO-GEO-PLAN.md)
+
+<a id="token-types"></a>
+## RT、AT 和 ID Token 有什么区别？
+
+| 名称 | 完整名称 / 导出字段 | 本项目中的含义 |
+| --- | --- | --- |
+| RT | Refresh Token / `refresh_token` | 认证服务签发的刷新凭据；本项目提取并导出它，不提供 RT 自动续期功能 |
+| AT | Access Token / `access_token` | 用于访问授权资源的访问令牌；导出中的 `expires_at` 描述 AT 到期时间 |
+| ID Token | ID Token / `id_token` | 包含登录身份相关 claims 的令牌；页面中的元数据解析不等于验证签名或认证有效性 |
+| API Key | API 密钥 | 与上述账号 Token 不同；本项目不会为账号创建 API Key |
+
+术语背景见 [OAuth 2.0 的 AT / RT 定义](https://www.rfc-editor.org/rfc/rfc6749#section-1.4)与 [OpenID Connect 的 ID Token 定义](https://openid.net/specs/openid-connect-core-1_0.html#IDToken)。本项目的支持范围与实际代码为准，平台可能撤销凭据或改变登录要求。
 
 ## 功能概览
 
@@ -62,6 +84,8 @@ Windows 创建虚拟环境时可使用 `python -m venv .venv`，后续将 `.venv
 7. 点击「在转换工具中查看」，无需手动下载、重新上传；也可在转换页选择方向后点击「载入最近提取结果」。载入会替换当前转换结果，并保留原提取结果的套餐、刷新时间和有效期。
 
 ## 使用声明与隐私
+
+**转换文件只在浏览器内存中处理；Token 获取结果会写入运行设备的输出目录。** 在第三方服务器上使用提取功能意味着凭据经该服务器处理，不能等同于“数据只在你的浏览器中”。推荐在自己控制的设备或服务器运行。
 
 首次进入 Token 获取、格式转换或 IP 检测中的任意页面时，都会显示同一份全局声明。点击「我已了解，开始使用」、关闭按钮或按 Esc 后，从该次操作起 **7 × 24 小时内不再提示**；到期后再次进入页面时重新显示。刷新、切换工具或打开同站点的新标签页会复用确认记录；在一个标签页确认，也会关闭其他标签页中已打开的声明。
 
@@ -382,11 +406,41 @@ node --test tests/*.mjs
 ```text
 chatGPT2RT-AT/
 ├── README.md
+├── README.en.md
+├── docs/                 # 提取指南、FAQ、维护说明与 SEO / GEO 方案
 ├── pyproject.toml
 ├── requirements.txt
 ├── rt_extractor/          # 独立模块、网页和登录协议
 └── tests/                 # 合成账号和模拟网络测试
 ```
+
+## 常见问题
+
+### 如何提取 ChatGPT RT 和 AT？
+
+在自己控制的设备上按[快速开始](#快速开始)启动工具，通过网页导入已有授权账号并完成要求的验证。只有同时获得 AT、RT 和 ID Token 才会标记成功；随后可查看 RT 或下载认证 JSON。单账号也可使用 CLI / Python。分步说明见 [Token 提取指南](docs/TOKEN-GUIDE.md)。
+
+### 已有 Token 可以直接转换 CPA 或 Sub2API 吗？
+
+可以。在格式转换页导入已有认证 JSON，不需要重新登录。转换只整理已有字段，不会兑换、续期或检查 Token 是否仍有效，详见[转换说明](#cpa--sub2api-格式转换)。
+
+### 为什么输入账号后仍显示 0 条，开始按钮不可用？
+
+先检查浏览器 Console。若看到 `Cannot use import statement outside a module`，可能是旧 HTML 模板仍在加载含 `import` 的新 JavaScript。更新后需让实际运行的 Python / Gunicorn 服务或容器加载同一版本，再刷新页面；只执行 `git pull` 或只重启 Nginx 不一定生效。详见[维护与更新](docs/MAINTAINERS.md#module-loading)。
+
+### 会自动注册、跳过 2FA 或一直刷新 RT 吗？
+
+不会。工具处理已有账号，2FA 密钥不能替代认证服务要求的额外邮箱或其他验证；项目不包含自动注册、手机号验证、自动邮箱取码或 RT 自动续期。
+
+更多问题包括“Token 保存在哪”“AT 过期是否代表 RT 失效”“IP 检测是否等于登录代理”，见 [FAQ](docs/FAQ.md)。
+
+## 来源与许可
+
+主项目目前没有声明完整的项目许可证，源码公开不等于已授予任意复制、修改或再分发权限；使用或分发前应确认作者授权。不要将局部第三方 MIT 许可视为整个项目的许可。
+
+CPA 转换模块适配自 [CPA2sub2API](https://github.com/gtxx3600/CPA2sub2API)，原始 MIT 许可和修改说明保留在 [THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md)。登录协议整理来源见[数据保存与运行限制](#数据保存与运行限制)。问题报告请附版本、脱敏错误和复现步骤，不要提交账号、密码、2FA 密钥或 Token。
+
+公开说明页由本项目提供：`/docs`、`/docs/token-extraction`、`/docs/token-types`、`/docs/cpa-sub2api`、`/docs/faq`。它们需要部署当前版本后才可访问；本 README 不表示已核验线上部署状态。网站与仓库的关键词、内容及抓取配置方案见 [SEO / GEO 优化方案](docs/SEO-GEO-PLAN.md)。
 
 ## 联系与交流
 

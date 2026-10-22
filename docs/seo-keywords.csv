@@ -1,0 +1,36 @@
+keyword,language,intent,primary_target,priority,content_requirement
+GPT提取Token,zh-CN,项目发现,/docs,P0,定义产品与自有账号用途
+GPT 提取 Token,zh-CN,项目发现,/docs,P0,自然写明获取AT RT和ID Token
+ChatGPT Token 提取,zh-CN,项目发现,/docs,P0,提供源码及本地安装入口
+ChatGPT Token 提取工具,zh-CN,项目发现,/docs,P0,列出真实功能和限制
+GPT Token 工具,zh-CN,项目发现,/docs,P1,避免描述为官方产品
+提取 RT,zh-CN,操作教程,/docs/token-extraction,P0,说明验证步骤和结果保存
+提取 AT,zh-CN,操作教程,/docs/token-extraction,P0,说明三类Token完整性校验
+ChatGPT RT 提取,zh-CN,操作教程,/docs/token-extraction,P0,面向使用者自有账号
+ChatGPT AT 获取,zh-CN,操作教程,/docs/token-extraction,P1,不承诺凭据永久有效
+获取 Refresh Token,zh-CN,操作教程,/docs/token-extraction,P1,不描述为绕过验证
+本地提取 Token,zh-CN,操作教程,/docs/token-extraction,P0,说明运行设备及明文文件
+批量提取 Token,zh-CN,操作教程,/docs/token-extraction,P1,说明输入上限与并发限制
+AT 和 RT 区别,zh-CN,术语比较,/docs/token-types,P0,给出全称和不同作用
+Access Token Refresh Token 区别,zh-CN,术语比较,/docs/token-types,P1,不等同OpenAI API Key
+ID Token 是什么,zh-CN,术语比较,/docs/token-types,P1,解释身份信息与授权区别
+Token 和 API Key 区别,zh-CN,术语比较,/docs/token-types,P1,不承诺导出即有API额度
+RT 有效期,zh-CN,术语比较,/docs/token-types,P1,不把AT到期时间当RT寿命
+CPA 转 Sub2API,zh-CN,格式迁移,/docs/cpa-sub2api,P0,说明已知字段映射
+Sub2API 转 CPA,zh-CN,格式迁移,/docs/cpa-sub2api,P0,说明账号类型跳过原因
+CPA JSON 转换,zh-CN,格式迁移,/docs/cpa-sub2api,P1,仅浏览器内处理
+Sub2API 导入格式,zh-CN,格式迁移,/docs/cpa-sub2api,P1,提供合成输出示例
+Token 格式转换,zh-CN,格式迁移,/docs/cpa-sub2api,P1,明确不刷新凭据
+提取 Token 失败,zh-CN,错误排查,/docs/faq,P0,区分脚本状态认证三层错误
+Token 获取按钮不能点击,zh-CN,错误排查,/docs/faq,P1,检查脚本模块与版本一致性
+提取 RT 验证码,zh-CN,错误排查,/docs/faq,P1,说明手动验证码与2FA边界
+Token 提取 429,zh-CN,错误排查,/docs/faq,P1,说明等待时间及不自动重试密码
+bob ai工具 隐私,zh-CN,信任核实,/docs/faq,P1,区分转换内存与提取结果落盘
+ChatGPT token extractor,en,Project discovery,README.en.md,P0,Explain ownership setup and limitations
+ChatGPT token export,en,Project discovery,README.en.md,P1,Describe AT RT and ID Token outputs
+self-hosted token extractor,en,Project discovery,README.en.md,P1,Explain local-only default and server boundaries
+refresh token export,en,Tutorial,/docs/token-extraction,P1,Describe verification and secure output handling
+access token extraction,en,Tutorial,/docs/token-extraction,P1,Avoid login success guarantees
+access token vs refresh token,en,Comparison,/docs/token-types,P1,Explain terms and expiry boundaries
+CPA Sub2API converter,en,Format conversion,/docs/cpa-sub2api,P1,Explain browser conversion and lossy mapping
+bob ai tools,en,Brand,README.en.md,P1,Use stable product and repository identity

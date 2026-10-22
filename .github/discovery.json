@@ -1,0 +1,10 @@
+{
+  "repository": "d100000/chatGPT2RT-AT",
+  "description": "bob ai工具：ChatGPT / GPT Token 提取工具，支持已有授权账号获取 RT（Refresh Token）、AT（Access Token）和 ID Token，批量导出 CPA / Sub2API，提供浏览器本地格式转换与 IP 检测。非 OpenAI 官方项目。",
+  "homepage": "https://tools.bob-api.com/",
+  "topics": [
+    "chatgpt", "gpt", "openai", "codex", "token-extractor", "chatgpt-token",
+    "refresh-token", "access-token", "id-token", "oauth2", "cpa", "sub2api",
+    "token-converter", "python", "flask", "self-hosted", "totp"
+  ]
+}

@@ -1,12 +1,12 @@
 {% extends "base.html" %}
 {% set active_page = "extractor" %}
-{% block title %}Token 获取{% endblock %}
+{% block title %}GPT Token 提取：RT / AT / ID Token{% endblock %}
 {% block page_id %}extractor{% endblock %}
 {% block tool_name %}Token 获取{% endblock %}
 {% block connection_label %}连接本地服务{% endblock %}
 {% block scripts %}<script type="module" src="{{ url_for('static', filename='app.js') }}"></script>{% endblock %}
 {% block content %}
-    <div class="page-heading"><div><p class="eyebrow">TOKEN EXTRACTION</p><h1>获取 Token，一次完成转换</h1><p class="page-description">登录已有账号，提取完整 Token，并自动生成 CPA 和 Sub2API 认证文件。</p></div><span class="local-badge">已有账号登录</span></div>
+    <div class="page-heading"><div><p class="eyebrow">TOKEN EXTRACTION</p><h1>提取 GPT Token，一次获取 RT / AT</h1><p class="page-description">登录你已获授权的 ChatGPT 账号，提取 RT、AT 和 ID Token，并自动生成 CPA 与 Sub2API 认证文件。</p></div><span class="local-badge">已有账号登录</span></div>
     {% include "privacy_notice.html" %}
     <ol class="workflow-strip" aria-label="Token 获取流程"><li><span>1</span>导入账号</li><li><span>2</span>完成登录验证</li><li><span>3</span>自动生成 CPA / Sub2API</li></ol>
     <div class="workbench">

@@ -5,6 +5,7 @@ import argparse
 import hmac
 import io
 import json
+import os
 from pathlib import Path
 import re
 import secrets
@@ -12,7 +13,7 @@ import time
 from typing import Callable
 from urllib.parse import urlsplit
 
-from flask import Flask, g, jsonify, render_template, request, send_file
+from flask import Flask, Response, abort, g, jsonify, render_template, request, send_file
 from werkzeug.exceptions import RequestEntityTooLarge
 
 from .abuse import AbuseGuard, AbuseLimited, AbusePolicy, LeasedIterator
@@ -20,6 +21,8 @@ from .api import extract_tokens
 from .batch import DEFAULT_CONCURRENCY, BatchInputError, BatchManager, parse_accounts
 from .browser_identity import BrowserIdentities
 from .cpa import build_cpa_record
+from .seo import (DOC_PAGES, DOCS_BY_SLUG, REPOSITORY_URL, llms_text, metadata,
+                  robots_text, sitemap_xml, structured_data, validate_public_url)
 from .sub2api import build_sub2api_export
 from .web_jobs import ACTIVE, JobManager, _credentials
 
@@ -27,7 +30,8 @@ def create_app(output_dir: str | Path | None = None, extractor: Callable | None 
                abuse_policy: AbusePolicy | None = None, abuse_clock: Callable = time.monotonic) -> Flask:
     app = Flask(__name__)
     app.config.update(MAX_CONTENT_LENGTH=3 * 1024 * 1024, MAX_FORM_MEMORY_SIZE=16 * 1024,
-                      MAX_FORM_PARTS=10, RT_CSRF_TOKEN=secrets.token_urlsafe(32))
+                      MAX_FORM_PARTS=10, RT_CSRF_TOKEN=secrets.token_urlsafe(32),
+                      BOB_AI_PUBLIC_URL=validate_public_url(os.environ.get("BOB_AI_PUBLIC_URL", "")))
     abuse = AbuseGuard(abuse_policy, abuse_clock)
     app.extensions["rt_abuse"] = abuse
     browser_identities = BrowserIdentities()
@@ -115,11 +119,25 @@ def create_app(output_dir: str | Path | None = None, extractor: Callable | None 
         response.headers["Cache-Control"] = "no-store"
         response.headers["X-Content-Type-Options"] = "nosniff"
         response.headers["Referrer-Policy"] = "no-referrer"
+        nonce = getattr(g, "structured_data_nonce", None)
+        script_policy = "'self'" + (f" 'nonce-{nonce}'" if nonce and response.status_code == 200 else "")
         response.headers["Content-Security-Policy"] = (
-            "default-src 'self'; script-src 'self'; style-src 'self'; "
+            f"default-src 'self'; script-src {script_policy}; style-src 'self'; "
             "img-src 'self' data:; connect-src 'self' https://ipok.io; base-uri 'none'; "
             "frame-ancestors 'none'; form-action 'self'"
         )
+        if request.endpoint == "docs" and response.status_code == 200:
+            response.headers["X-Robots-Tag"] = (
+                "index, follow" if app.config["BOB_AI_PUBLIC_URL"] else "noindex, follow"
+            )
+        elif (app.config["BOB_AI_PUBLIC_URL"] and request.endpoint == "static"
+              and (request.view_args or {}).get("filename") in {"social-preview.png", "social-preview.svg"}
+              and response.status_code == 200):
+            response.headers["X-Robots-Tag"] = "index, follow"
+        elif request.endpoint in {"index", "converter", "network"} and response.status_code == 200:
+            response.headers["X-Robots-Tag"] = "noindex, follow, noarchive"
+        else:
+            response.headers["X-Robots-Tag"] = "noindex, nofollow, nosnippet, noarchive"
         if response.status_code == 200:
             for cookie in getattr(g, "browser_cookies", ()):
                 response.set_cookie(cookie.name, cookie.value, max_age=cookie.max_age,
@@ -147,15 +165,45 @@ def create_app(output_dir: str | Path | None = None, extractor: Callable | None 
 
     @app.get("/")
     def index():
-        return render_template("index.html", csrf_token=app.config["RT_CSRF_TOKEN"])
+        return render_template("index.html", csrf_token=app.config["RT_CSRF_TOKEN"],
+                               seo=metadata(app.config["BOB_AI_PUBLIC_URL"], "/"))
 
     @app.get("/converter")
     def converter():
-        return render_template("converter.html", csrf_token=app.config["RT_CSRF_TOKEN"])
+        return render_template("converter.html", csrf_token=app.config["RT_CSRF_TOKEN"],
+                               seo=metadata(app.config["BOB_AI_PUBLIC_URL"], "/converter"))
 
     @app.get("/network")
     def network():
-        return render_template("network.html", csrf_token=app.config["RT_CSRF_TOKEN"])
+        return render_template("network.html", csrf_token=app.config["RT_CSRF_TOKEN"],
+                               seo=metadata(app.config["BOB_AI_PUBLIC_URL"], "/network"))
+
+    @app.get("/docs", defaults={"slug": ""})
+    @app.get("/docs/<slug>")
+    def docs(slug):
+        page = DOCS_BY_SLUG.get(slug)
+        if page is None:
+            abort(404)
+        public_url = app.config["BOB_AI_PUBLIC_URL"]
+        g.structured_data_nonce = secrets.token_urlsafe(24)
+        return render_template(
+            "docs.html", page=page, doc_pages=DOC_PAGES, repository_url=REPOSITORY_URL,
+            seo=metadata(public_url, page.path, page=page),
+            structured_data=structured_data(public_url, page),
+            structured_nonce=g.structured_data_nonce,
+        )
+
+    @app.get("/robots.txt")
+    def robots():
+        return Response(robots_text(app.config["BOB_AI_PUBLIC_URL"]), mimetype="text/plain")
+
+    @app.get("/sitemap.xml")
+    def sitemap():
+        return Response(sitemap_xml(app.config["BOB_AI_PUBLIC_URL"]), mimetype="application/xml")
+
+    @app.get("/llms.txt")
+    def llms():
+        return Response(llms_text(app.config["BOB_AI_PUBLIC_URL"]), mimetype="text/plain")
 
     @app.get("/health")
     def health():
