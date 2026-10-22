@@ -1,0 +1,27 @@
+<dialog id="site-notice-dialog" class="rt-dialog site-notice-dialog" aria-labelledby="site-notice-title" aria-describedby="site-notice-summary">
+  <div class="site-notice-heading">
+    <div><p class="eyebrow">BOB AI · 使用声明</p><h2 id="site-notice-title" tabindex="-1" autofocus>欢迎使用 bob ai工具</h2></div>
+    <button id="site-notice-close" class="icon-button" type="button" aria-label="关闭使用声明"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="m6 6 12 12M18 6 6 18"/></svg></button>
+  </div>
+  <p id="site-notice-summary" class="site-notice-summary">使用前，请了解数据处理方式与开源信息。</p>
+  <div class="site-notice-items">
+    <section class="site-notice-item" aria-labelledby="site-notice-privacy-title">
+      <h3 id="site-notice-privacy-title">数据与隐私</h3>
+      <p>格式转换仅在浏览器内存中完成，不上传服务器，也不写入浏览器存储。密码和 2FA 密钥不持久保存。</p>
+      <p class="site-notice-retention">Token 获取结果仅保存在运行本工具的设备中，不会上传给作者，请自行妥善保管。</p>
+    </section>
+    <section class="site-notice-item" aria-labelledby="site-notice-source-title">
+      <h3 id="site-notice-source-title">代码完全开源</h3>
+      <p>源码公开，欢迎查阅、反馈问题与参与改进。</p>
+      <a class="site-notice-source" href="https://github.com/d100000/chatGPT2RT-AT" target="_blank" rel="noopener noreferrer">在 GitHub 查看源码 <span aria-hidden="true">↗</span></a>
+    </section>
+    <section class="site-notice-item" aria-labelledby="site-notice-community-title">
+      <h3 id="site-notice-community-title">欢迎加入 QQ 群讨论</h3>
+      <p>交流使用经验，一起让工具更好用。</p>
+      <div class="site-notice-group"><span>QQ群 <strong>916444032</strong></span><button id="site-notice-copy-group" class="button button-secondary" type="button">复制群号</button></div>
+      <p id="site-notice-copy-status" class="site-notice-copy-status" role="status" aria-live="polite"></p>
+    </section>
+  </div>
+  <button id="site-notice-confirm" class="button button-primary site-notice-confirm" type="button">我已了解，开始使用</button>
+  <p id="site-notice-storage-note" class="site-notice-storage-note">本浏览器仅记录声明确认时间，用于 7 天内免提示。</p>
+</dialog>

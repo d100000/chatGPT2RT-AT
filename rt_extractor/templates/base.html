@@ -1,6 +1,6 @@
 <!doctype html>
 <!-- THESIS: One local workbench connects token extraction, format conversion, and browser network inspection.
-OWN-WORLD: Inherited RT blue, white operational surfaces, system typography, and shared form controls.
+OWN-WORLD: bob ai工具 uses blue and white operational surfaces, system typography, and shared form controls.
 STORY: Choose a tool, complete its input, inspect the actual result, and export or continue to the next tool.
 FIRST VIEWPORT: Persistent three-tool navigation at left, current-network summary beneath it, and a focused working area at right.
 FORM: User-authorized reorganization of the existing workbench; compact navigation and input/result composition. -->
@@ -9,10 +9,11 @@ FORM: User-authorized reorganization of the existing workbench; compact navigati
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <meta name="rt-csrf" content="{{ csrf_token }}">
-  <title>{% block title %}账号工作台{% endblock %} · RT Workspace</title>
+  <title>{% block title %}首页{% endblock %} · bob ai工具</title>
   <link rel="stylesheet" href="{{ url_for('static', filename='app.css') }}">
   {% block styles %}{% endblock %}
   <script src="{{ url_for('static', filename='workspace.js') }}" defer></script>
+  <script type="module" src="{{ url_for('static', filename='site-notice.mjs') }}"></script>
   <script type="module" src="{{ url_for('static', filename='network.js') }}"></script>
   {% block scripts %}{% endblock %}
 </head>
@@ -20,7 +21,7 @@ FORM: User-authorized reorganization of the existing workbench; compact navigati
   <a class="skip-link" href="#main-content">跳到主要内容</a>
   <aside class="sidebar" aria-label="工作台导航">
     <div class="brand-area">
-      <a class="brand" href="/" aria-label="RT 账号工作台首页"><span class="brand-mark">RT<span>↗</span></span><span class="brand-name">账号工作台<small>本地工具集</small></span></a>
+      <a class="brand" href="/" aria-label="bob ai工具首页"><span class="brand-mark" aria-hidden="true">bob</span><span class="brand-name">bob AI 工具<small>本地工具集</small></span></a>
       <a class="brand-source" href="https://github.com/d100000/chatGPT2RT-AT" target="_blank" rel="noopener noreferrer">GitHub 开源地址 <span aria-hidden="true">↗</span></a>
     </div>
     <p class="nav-caption">工作空间</p>
@@ -39,9 +40,10 @@ FORM: User-authorized reorganization of the existing workbench; compact navigati
     <div class="sidebar-foot"><span class="status-dot" aria-hidden="true"></span>本地运行 · 凭据由你保管</div>
   </aside>
   <div class="app-main">
-    <header class="shell-bar"><div class="shell-location"><span>工作台</span><span aria-hidden="true">/</span><strong>{% block tool_name %}{% endblock %}</strong></div><div class="connection" id="connection"><span class="status-dot" aria-hidden="true"></span><span id="connection-label">{% block connection_label %}本地工作空间{% endblock %}</span></div></header>
+    <header class="shell-bar"><div class="shell-location"><span>bob ai工具</span><span aria-hidden="true">/</span><strong>{% block tool_name %}{% endblock %}</strong></div><div class="connection" id="connection"><span class="status-dot" aria-hidden="true"></span><span id="connection-label">{% block connection_label %}本地工作空间{% endblock %}</span></div></header>
     <main id="main-content" class="workspace {% block workspace_class %}{% endblock %}" tabindex="-1">{% block content %}{% endblock %}</main>
   </div>
+  {% include "site_notice_dialog.html" %}
   {% block dialogs %}{% endblock %}
 </body>
 </html>
