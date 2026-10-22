@@ -134,7 +134,7 @@ class WebTests(unittest.TestCase):
         self.assertIn("attachment", downloaded.headers.get("Content-Disposition", ""))
         self.assertEqual(json.loads(downloaded.get_data(as_text=True)), synthetic_bundle().to_dict())
         downloaded.close()
-        files = list(self.output_dir.glob("*.json"))
+        files = list(self.output_dir.glob("tokens-*.json"))
         self.assertEqual(len(files), 1)
         self.assertEqual(json.loads(files[0].read_text()), synthetic_bundle().to_dict())
         if os.name == "posix":

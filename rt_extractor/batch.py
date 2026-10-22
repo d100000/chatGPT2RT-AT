@@ -16,11 +16,13 @@ from typing import Any
 import uuid
 import zipfile
 
-from .web_jobs import ACTIVE, Job, JobManager, _credentials
+from .cpa import save_export
+from .web_jobs import ACTIVE, Job, JobManager, _credentials, converted_result
 
 MAX_ACCOUNTS = 1000
 DEFAULT_CONCURRENCY = 2
 MAX_CONCURRENCY = 3
+_CONVERSION_ERROR = "批量 CPA / Sub2API 自动生成失败；单账号文件已保留，可重试下载或检查输出目录权限"
 _ID = re.compile(r"[0-9a-f]{32}")
 _TERMINAL_BATCH = {"completed", "cancelled"}
 _TERMINAL_JOB = {"success", "error", "cancelled"}
@@ -102,6 +104,8 @@ class Batch:
     current: Job | None = None
     cancel_requested: bool = False
     error: str | None = None
+    conversion_status: str = "not_saved"
+    conversion_error: str | None = None
     inflight: set[str] = field(default_factory=set, repr=False)
     dispatch_not_before: float = field(default=0, repr=False)
     wake: threading.Event = field(default_factory=threading.Event, repr=False)
@@ -121,8 +125,15 @@ class Batch:
             result = {
                 "directory": str(self.directory),
                 "sub2api_url": f"/api/batches/{self.id}/sub2api-download",
+                "cpa_url": f"/api/batches/{self.id}/cpa-download",
                 "zip_url": f"/api/batches/{self.id}/download",
                 "rt_url": f"/api/batches/{self.id}/rt-download",
+                "conversion_status": self.conversion_status,
+                "conversion_error": self.conversion_error,
+                "cpa_filename": f"cpa-{self.id}.zip",
+                "cpa_path": str(self.directory / f"cpa-{self.id}.zip"),
+                "sub2api_filename": f"sub2api-{self.id}.json",
+                "sub2api_path": str(self.directory / f"sub2api-{self.id}.json"),
             }
         return {
             "id": self.id, "status": status, "concurrency": self.concurrency, "counts": counts,
@@ -225,13 +236,22 @@ class BatchManager:
                     "download_url": f"/api/jobs/{job_id}/download",
                     "obtained_at": optional_text(saved_result.get("obtained_at"), 100) or "",
                     "expires_at": optional_text(saved_result.get("expires_at"), 100) or "",
+                    **converted_result(job_id, directory),
                 }
             rows.append(row)
+        generated = [directory / f"cpa-{state['id']}.zip", directory / f"sub2api-{state['id']}.json"]
+        saved_batch_result = state.get("result")
+        conversion_status = "ready" if all(path.is_file() and not path.is_symlink() for path in generated) else (
+            "error" if isinstance(saved_batch_result, dict) and saved_batch_result.get("conversion_status") == "error"
+            else "not_saved"
+        )
         return Batch(
             id=state["id"], directory=directory, rows=rows, status=state["status"],
             concurrency=validate_concurrency(state.get("concurrency", 1)),
             cancel_requested=state["status"] == "cancelled",
             error=optional_text(state.get("error")),
+            conversion_status=conversion_status,
+            conversion_error=_CONVERSION_ERROR if conversion_status == "error" else None,
         )
 
     @staticmethod
@@ -379,10 +399,31 @@ class BatchManager:
                 batch.status = "cancelled" if batch.cancel_requested else "completed"
                 batch.current = None
                 self.jobs.active_batch = None
+                if any(row.status == "success" for row in batch.rows):
+                    self._save_generated(batch)
                 try:
                     self._save_completed(batch)
                 except OSError:
                     batch.error = "批次状态保存失败；重启后请从保存目录查看已有结果"
+
+    def _save_generated(self, batch: Batch) -> None:
+        """Generate both batch formats before publishing terminal metadata."""
+        generated = []
+        try:
+            exports = [self.export(batch.id, cpa=True), self.export(batch.id, sub2api=True)]
+            for stream, filename, _mimetype in exports:
+                generated.append(save_export(stream.getvalue(), batch.directory / filename))
+            batch.conversion_status = "ready"
+            batch.conversion_error = None
+        except Exception:
+            for path in generated:
+                try:
+                    path.unlink(missing_ok=True)
+                except OSError:
+                    pass
+            batch.conversion_status = "error"
+            batch.conversion_error = _CONVERSION_ERROR
+            batch.error = batch.conversion_error
 
     def cancel(self, batch_id: str) -> dict:
         with self.lock:
@@ -391,9 +432,8 @@ class BatchManager:
                 self._request_cancel(batch)
             return batch.snapshot()
 
-    def export(self, batch_id: str, *, rt_only: bool = False, sub2api: bool = False) -> tuple[io.BytesIO, str, str]:
-        if rt_only and sub2api:
-            raise ValueError("只能选择一种导出格式")
+    def _export_payloads(self, batch_id: str) -> tuple[dict, list, list]:
+        """Read every successful result, failing atomically for missing records."""
         with self.lock:
             batch = self.batches[batch_id]
             snapshot = batch.snapshot()
@@ -416,6 +456,34 @@ class BatchManager:
             ):
                 raise ValueError("成功结果文件的 Token 不完整")
             successful.append((row, path.name, payload))
+        return snapshot, rows, successful
+
+    def conversion_source(self, batch_id: str) -> dict:
+        from .cpa import build_cpa_record
+
+        _, _, successful = self._export_payloads(batch_id)
+        # Start from CPA auth records rather than the legacy Sub2API download,
+        # which intentionally omits expiry, refresh time, and plan metadata.
+        return {"accounts": [build_cpa_record(payload) for _, _, payload in successful]}
+
+    def export(self, batch_id: str, *, rt_only: bool = False, sub2api: bool = False,
+               cpa: bool = False) -> tuple[io.BytesIO, str, str]:
+        if sum((rt_only, sub2api, cpa)) > 1:
+            raise ValueError("只能选择一种导出格式")
+        snapshot, rows, successful = self._export_payloads(batch_id)
+        if cpa:
+            from .cpa import build_cpa_record
+
+            # Convert all records before writing, so an incomplete result cannot
+            # silently produce a partial archive. Job IDs keep names unique and
+            # prevent account email addresses from becoming filesystem paths.
+            records = [(row["id"], build_cpa_record(payload)) for row, _, payload in successful]
+            output = io.BytesIO()
+            with zipfile.ZipFile(output, "w", zipfile.ZIP_DEFLATED) as archive:
+                for job_id, record in records:
+                    archive.writestr(f"codex-{job_id}.json", json.dumps(record, ensure_ascii=False, indent=2) + "\n")
+            output.seek(0)
+            return output, f"cpa-{batch_id}.zip", "application/zip"
         if sub2api:
             from .sub2api import build_sub2api_export
 

@@ -1,0 +1,56 @@
+{% extends "base.html" %}
+{% set active_page = "converter" %}
+{% block title %}格式转换{% endblock %}
+{% block page_id %}converter{% endblock %}
+{% block tool_name %}格式转换{% endblock %}
+{% block connection_label %}浏览器本地转换{% endblock %}
+{% block workspace_class %}converter-workspace{% endblock %}
+{% block scripts %}<script type="module" src="{{ url_for('static', filename='converter-ui.mjs') }}"></script>{% endblock %}
+{% block content %}
+    <div class="page-heading"><div><p class="eyebrow">FORMAT CONVERSION</p><h1>认证文件，按需互转</h1><p class="page-description">载入提取结果或导入已有 JSON，在 CPA 与 Sub2API 之间转换。</p></div><span class="local-badge">浏览器本地处理</span></div>
+    {% include "privacy_notice.html" %}
+    <div class="converter-toolbar"><div class="converter-mode" role="group" aria-label="转换方向">
+      <button id="mode-cpa" class="mode-button" type="button" aria-pressed="true">CPA → Sub2API</button>
+      <button id="mode-sub2api" class="mode-button" type="button" aria-pressed="false">Sub2API → CPA</button>
+    </div>
+    <div class="converter-latest-source"><button id="converter-use-latest" class="button button-secondary" type="button">载入最近提取结果 <span aria-hidden="true">↗</span></button><span>载入会替换当前结果</span></div></div>
+    <p id="converter-origin" class="source-origin" role="status" hidden></p>
+    <p class="field-help mode-help">切换方向会清空当前输入和结果。转换只映射已有字段，不刷新 Token 或验证其有效性。</p>
+    <div class="workbench converter-workbench">
+      <section class="input-pane" aria-labelledby="converter-import-heading">
+        <div class="section-heading"><h2 id="converter-import-heading">导入 CPA 认证文件</h2><span class="section-caption">最多 1,000 个账号</span></div>
+        <fieldset id="converter-input-fields">
+          <legend class="sr-only">认证文件与 JSON 内容</legend>
+          <div id="json-drop-zone" class="json-drop-zone" aria-describedby="converter-limits">
+            <p class="drop-title">将 JSON 文件拖到这里</p>
+            <p class="field-help">可一次选择多个文件，或导入整个目录。</p>
+            <div class="file-import-actions"><button id="json-files-button" class="button button-secondary" type="button">选择 JSON 文件</button><button id="json-directory-button" class="text-button" type="button">选择目录</button></div>
+            <input id="json-files" class="sr-only" type="file" accept=".json,application/json" multiple tabindex="-1" aria-label="选择多个 JSON 文件">
+            <input id="json-directory" class="sr-only" type="file" accept=".json,application/json" multiple webkitdirectory tabindex="-1" aria-label="选择包含 JSON 文件的目录">
+          </div>
+          <p id="converter-limits" class="field-help">每个文件或 JSON 文档最多 2 MiB，累计最多 20 MiB、1,000 个文件与账号。目录中只读取 .json 文件。</p>
+          <div class="converter-paste-field"><label for="converter-json">或粘贴 JSON 内容</label><textarea id="converter-json" rows="8" spellcheck="false" autocomplete="off" autocapitalize="off" aria-describedby="converter-paste-help" placeholder='{"type":"codex","access_token":"…","id_token":"…"}'></textarea><p id="converter-paste-help" class="field-help">支持单个 JSON、连续 JSON、JSONL 和 CPA 账号数组。可继续导入，结果会追加到列表。</p></div>
+          <button id="convert-paste-button" class="button button-primary" type="button" disabled>转换粘贴内容 <span aria-hidden="true">→</span></button>
+        </fieldset>
+        <div id="converter-error" class="notice notice-error converter-notice" role="alert" hidden></div>
+        <p class="privacy-note">认证文件只在此页面的内存中解析，不上传到服务器，也不写入浏览器存储。离开页面后需重新导入。</p>
+        <noscript><p class="notice notice-error">请启用 JavaScript 后使用本地格式转换。</p></noscript>
+      </section>
+      <section class="output-pane" aria-labelledby="converter-output-heading">
+        <div class="section-heading"><h2 id="converter-output-heading">转换结果</h2><button id="converter-clear" class="text-button" type="button" disabled>清空输入与结果</button></div>
+        <div class="batch-counts converter-counts" aria-label="转换统计"><div><span>已处理账号</span><strong id="convert-count-total">0</strong></div><div><span>成功</span><strong id="convert-count-success">0</strong></div><div><span>失败 / 跳过</span><strong id="convert-count-error">0</strong></div></div>
+        <p id="converter-status" class="converter-status" role="status" aria-live="polite">等待导入 CPA 认证文件</p>
+        <div id="converter-downloads" class="downloads converter-downloads" hidden><div class="download-actions"><button id="convert-merged" class="button button-primary" type="button">下载合并 Sub2API JSON</button><button id="convert-split" class="button button-secondary" type="button">下载拆分文件</button><button id="convert-preview" class="text-button" type="button" aria-haspopup="dialog">预览合并 JSON</button></div><p id="converter-export-help" class="field-help">仅导出转换成功的账号。拆分结果超过 3 个时自动打包为 ZIP。</p></div>
+        <div id="converter-empty" class="empty-state"><div class="file-symbol" aria-hidden="true"><span>{ }</span><i></i><i></i></div><h3>转换后即可预览和下载</h3><p>每个文件独立处理，失败不会中断其他账号。<br>支持合并 Sub2API JSON 或拆分 CPA 认证文件。</p></div>
+        <div id="converter-results" class="results-panel" hidden><div class="results-heading"><h3>账号明细</h3><span>导出文件包含认证 Token，请妥善保管</span></div><div class="table-scroll" tabindex="0" role="region" aria-label="转换结果表格，可横向滚动"><table class="converter-table"><thead><tr><th scope="col">来源 / 账号</th><th scope="col">平台</th><th scope="col">状态</th><th scope="col">操作</th></tr></thead><tbody id="converter-results-body"></tbody></table></div></div>
+      </section>
+    </div>
+    <footer class="workspace-footer"><span>支持 Codex / OpenAI · Claude · Antigravity · Gemini</span><a href="https://github.com/gtxx3600/CPA2sub2API" target="_blank" rel="noopener noreferrer">查看开源项目 ↗</a></footer>
+  {% endblock %}
+{% block dialogs %}
+  <dialog id="converter-preview-dialog" class="rt-dialog converter-preview-dialog" aria-labelledby="converter-preview-title" aria-describedby="converter-preview-help">
+    <h2 id="converter-preview-title">预览转换结果</h2><p id="converter-preview-help" class="field-help">包含完整认证 Token。预览最多显示 24,000 个字符，下载文件保留完整内容；关闭后清空预览。</p>
+    <pre id="converter-preview-value" class="converter-preview-value" tabindex="0"></pre>
+    <div class="rt-view-actions"><button id="converter-preview-close" class="button button-secondary" type="button" autofocus>关闭并隐藏</button></div>
+  </dialog>
+{% endblock %}

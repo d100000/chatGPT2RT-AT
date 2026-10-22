@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import argparse
 import hmac
+import io
 import json
 from pathlib import Path
 import re
@@ -14,6 +15,8 @@ from flask import Flask, jsonify, render_template, request, send_file
 
 from .api import extract_tokens
 from .batch import DEFAULT_CONCURRENCY, BatchInputError, BatchManager, parse_accounts
+from .cpa import build_cpa_record
+from .sub2api import build_sub2api_export
 from .web_jobs import JobManager, _credentials
 
 def create_app(output_dir: str | Path | None = None, extractor: Callable | None = None) -> Flask:
@@ -52,7 +55,7 @@ def create_app(output_dir: str | Path | None = None, extractor: Callable | None 
         response.headers["Referrer-Policy"] = "no-referrer"
         response.headers["Content-Security-Policy"] = (
             "default-src 'self'; script-src 'self'; style-src 'self'; "
-            "img-src 'self' data:; connect-src 'self'; base-uri 'none'; "
+            "img-src 'self' data:; connect-src 'self' https://ipok.io; base-uri 'none'; "
             "frame-ancestors 'none'; form-action 'self'"
         )
         return response
@@ -64,6 +67,14 @@ def create_app(output_dir: str | Path | None = None, extractor: Callable | None 
     @app.get("/")
     def index():
         return render_template("index.html", csrf_token=app.config["RT_CSRF_TOKEN"])
+
+    @app.get("/converter")
+    def converter():
+        return render_template("converter.html", csrf_token=app.config["RT_CSRF_TOKEN"])
+
+    @app.get("/network")
+    def network():
+        return render_template("network.html", csrf_token=app.config["RT_CSRF_TOKEN"])
 
     @app.get("/health")
     def health():
@@ -144,6 +155,48 @@ def create_app(output_dir: str | Path | None = None, extractor: Callable | None 
             return jsonify(error="结果文件缺少有效 RT"), 409
         return jsonify(refresh_token=value)
 
+    @app.get("/api/jobs/<job_id>/cpa-download")
+    def download_cpa(job_id: str):
+        job = manager.snapshot(job_id)
+        if job is None:
+            return jsonify(error="任务不存在"), 404
+        if job["status"] != "success":
+            return jsonify(error="任务尚未成功完成"), 409
+        output = Path(job["result"]["path"])
+        if not output.is_file() or output.is_symlink():
+            return jsonify(error="结果文件已被移走，请查看保存目录"), 404
+        try:
+            payload = json.loads(output.read_text(encoding="utf-8"))
+        except (OSError, ValueError):
+            return jsonify(error="结果文件无法读取，请检查已保存的 JSON"), 409
+        try:
+            record = build_cpa_record(payload)
+        except ValueError as exc:
+            return jsonify(error=str(exc)), 409
+        stream = io.BytesIO((json.dumps(record, ensure_ascii=False, indent=2) + "\n").encode("utf-8"))
+        return send_file(stream, as_attachment=True, download_name=f"codex-{job_id}.json", mimetype="application/json")
+
+    @app.get("/api/jobs/<job_id>/sub2api-download")
+    def download_sub2api(job_id: str):
+        job = manager.snapshot(job_id)
+        if job is None:
+            return jsonify(error="任务不存在"), 404
+        if job["status"] != "success":
+            return jsonify(error="任务尚未成功完成"), 409
+        output = Path(job["result"]["path"])
+        if not output.is_file() or output.is_symlink():
+            return jsonify(error="结果文件已被移走，请查看保存目录"), 404
+        try:
+            payload = json.loads(output.read_text(encoding="utf-8"))
+        except (OSError, ValueError):
+            return jsonify(error="结果文件无法读取，请检查已保存的 JSON"), 409
+        try:
+            document = build_sub2api_export([payload])
+        except ValueError as exc:
+            return jsonify(error=str(exc)), 409
+        stream = io.BytesIO((json.dumps(document, ensure_ascii=False, indent=2) + "\n").encode("utf-8"))
+        return send_file(stream, as_attachment=True, download_name=f"sub2api-{job_id}.json", mimetype="application/json")
+
     @app.post("/api/batches")
     def start_batch():
         payload = request.get_json(silent=True)
@@ -180,9 +233,9 @@ def create_app(output_dir: str | Path | None = None, extractor: Callable | None 
         except KeyError:
             return jsonify(error="批次不存在"), 404
 
-    def batch_download(batch_id: str, *, rt_only: bool = False, sub2api: bool = False):
+    def batch_download(batch_id: str, *, rt_only: bool = False, sub2api: bool = False, cpa: bool = False):
         try:
-            stream, name, mimetype = batches.export(batch_id, rt_only=rt_only, sub2api=sub2api)
+            stream, name, mimetype = batches.export(batch_id, rt_only=rt_only, sub2api=sub2api, cpa=cpa)
         except KeyError:
             return jsonify(error="批次不存在"), 404
         except ValueError as exc:
@@ -200,6 +253,19 @@ def create_app(output_dir: str | Path | None = None, extractor: Callable | None 
     @app.get("/api/batches/<batch_id>/sub2api-download")
     def download_batch_sub2api(batch_id: str):
         return batch_download(batch_id, sub2api=True)
+
+    @app.get("/api/batches/<batch_id>/cpa-download")
+    def download_batch_cpa(batch_id: str):
+        return batch_download(batch_id, cpa=True)
+
+    @app.get("/api/batches/<batch_id>/conversion-source")
+    def batch_conversion_source(batch_id: str):
+        try:
+            return jsonify(batches.conversion_source(batch_id))
+        except KeyError:
+            return jsonify(error="批次不存在"), 404
+        except ValueError as exc:
+            return jsonify(error=str(exc)), 409
 
     return app
 

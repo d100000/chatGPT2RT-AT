@@ -19,7 +19,8 @@ rt-extractor-web = "rt_extractor.web:main"
 
 [tool.setuptools]
 packages = ["rt_extractor", "rt_extractor._protocol"]
+license-files = ["THIRD_PARTY_NOTICES.md"]
 
 [tool.setuptools.package-data]
-"rt_extractor" = ["templates/*.html", "static/*.css", "static/*.js"]
+"rt_extractor" = ["templates/*.html", "static/*.css", "static/*.js", "static/*.mjs"]
 "rt_extractor._protocol" = ["*.js"]

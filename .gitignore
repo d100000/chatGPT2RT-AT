@@ -20,6 +20,10 @@ account*.csv
 account*.tsv
 tokens*.json
 sub2api*.json
+sub2api-split-*.zip
+codex-*.json
+*.cpa.json
+cpa-*.zip
 rt-*.txt
 output/
 rt-output/

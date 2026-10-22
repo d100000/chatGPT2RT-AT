@@ -1,0 +1,59 @@
+{% extends "base.html" %}
+{% set active_page = "network" %}
+{% block title %}IP 纯净度检测{% endblock %}
+{% block page_id %}network{% endblock %}
+{% block tool_name %}IP 纯净度检测{% endblock %}
+{% block connection_label %}IPOK 多源检测{% endblock %}
+{% block workspace_class %}network-workspace{% endblock %}
+{% block styles %}<link rel="stylesheet" href="{{ url_for('static', filename='network.css') }}">{% endblock %}
+{% block content %}
+<!-- Reference report layout within the shared workspace theme: a score ring,
+     explicit evidence limitations, and detailed source facts. All values come from IPOK. -->
+  <section class="network-hero" aria-labelledby="network-title">
+    <p class="network-kicker"><span aria-hidden="true"></span>IPOK · 网络诊断</p>
+    <h1 id="network-title"><span class="network-title-lead">IP 纯净度检测：</span><span>看清类型</span><span> · 风险证据</span><span> · 地区参考</span></h1>
+    <p class="network-intro">多源聚合的 IP 风险检测，查看结果，也看见结果背后的依据。</p>
+    <div class="network-public-ip"><p id="network-ip-label">你的公网出口 IP</p><div class="network-address-row"><strong id="network-ip" class="network-address">—</strong><span id="network-ip-version" class="network-ip-version">IP</span><button id="network-copy-ip" class="icon-button" type="button" aria-label="复制当前显示的 IP" title="复制 IP" disabled><svg viewBox="0 0 24 24" aria-hidden="true"><rect x="8" y="8" width="12" height="12" rx="2"/><path d="M16 8V4H4v12h4"/></svg></button></div><p id="network-copy-status" class="network-copy-status" role="status" aria-live="polite"></p></div>
+    <form id="network-query-form" class="network-query-form"><label class="sr-only" for="network-query-input">查询公网 IP，留空检测当前浏览器出口</label><input id="network-query-input" name="ip" type="text" autocomplete="off" autocapitalize="off" spellcheck="false" placeholder="查询任意公网 IP（留空检测自己）" aria-describedby="network-query-help"><button id="network-query-button" class="button button-primary" type="submit">查询</button></form>
+    <div class="network-query-options"><p id="network-query-help">支持 IPv4 / IPv6</p><button id="network-self-button" class="text-button" type="button">返回当前出口</button><button id="network-refresh" class="text-button" type="button">重新检测</button></div>
+    <div class="network-query-examples" aria-label="试填查询地址"><span>试填地址</span><button type="button" data-network-example="1.1.1.1">1.1.1.1</button><button type="button" data-network-example="8.8.8.8">8.8.8.8</button><span>仅填入，不自动查询</span></div>
+    <p id="network-query-context" class="network-query-context">当前检测对象：浏览器公网出口</p>
+    <p id="network-query-feedback" class="network-query-feedback" role="alert" hidden></p>
+    <div class="network-principles"><span>多源交叉参考</span><span>逐源证据可查</span><a href="https://ipok.io/methodology" target="_blank" rel="noopener noreferrer">评分方法公开 ↗</a><span>缺失证据不等于安全</span></div>
+  </section>
+
+  <p id="network-status" class="network-status" role="status" aria-live="polite">正在检测浏览器的网络出口…</p>
+  <div id="network-error" class="notice notice-error" role="alert" hidden></div>
+  <section id="network-conclusion" class="network-conclusion" aria-label="本次检测结论">等待来源返回检测资料。</section>
+
+  <section class="network-risk-report" aria-labelledby="network-report-heading">
+    <h2 id="network-report-heading" class="sr-only">IP 类型与风险证据</h2>
+    <div class="network-score-column">
+      <div id="network-gauge" class="network-gauge" data-band="unknown" role="img" aria-label="风险值尚未返回">
+        <svg viewBox="0 0 180 180" aria-hidden="true"><circle class="network-gauge-track" cx="90" cy="90" r="76"/><circle id="network-gauge-arc" class="network-gauge-arc" cx="90" cy="90" r="76" stroke-dasharray="0 477.522"/></svg>
+        <div class="network-gauge-value"><strong id="network-score">—</strong><span>风险值 / 100</span><p id="network-verdict">等待检测</p></div>
+      </div>
+      <ul class="network-score-legend" aria-label="风险值分档"><li data-band="low"><i aria-hidden="true"></i><span>低风险迹象</span><span>&lt;15</span></li><li data-band="guarded"><i aria-hidden="true"></i><span>较低风险迹象</span><span>15–49</span></li><li data-band="elevated"><i aria-hidden="true"></i><span>需要警惕</span><span>50–69</span></li><li data-band="high"><i aria-hidden="true"></i><span>高风险迹象</span><span>≥70</span></li></ul>
+      <p class="network-score-note">分数仅描述本次返回的 IP 层证据，不代表账号、设备或平台判断。</p>
+    </div>
+    <div class="network-profile">
+      <div class="network-profile-section"><div class="network-profile-line"><h3>IP 类型</h3><span id="network-type" class="network-tag">待检测</span></div><p id="network-usage-description" class="network-secondary">来源返回后显示网络用途与类型说明。</p><h3 class="network-risk-title">风险信号</h3><div id="network-risk" class="network-tags">待检测</div><p id="network-source-counts" class="network-secondary">等待各检测来源返回</p><p id="network-attribution" class="network-secondary">出口归属：待检测</p></div>
+      <div class="network-profile-section"><div class="network-profile-line"><h3>共享人数</h3><strong id="network-shared-users">未知</strong><span class="network-estimate-label">估算</span></div><p id="network-shared-note" class="network-secondary">仅在来源提供时展示共享规模估计，不代表实测人数。</p><meter id="network-shared-marker" class="network-shared-meter" min="0" max="3" low="1.5" high="2.5" optimum="1" aria-label="来源估计的共享背景" hidden></meter><div class="network-shared-legend"><span>较少（来源估计）</span><span>一般</span><span>较多</span></div></div>
+      <div class="network-profile-section"><div class="network-profile-line"><h3>原生标签（来源参考）</h3><span id="network-native-type" class="network-tag network-tag-neutral">未知</span></div><p id="network-native-note" class="network-secondary">等待注册地与定位资料；国家一致性标签不是原生出口证明。</p><div class="network-numeric-line"><span>IP（数字）</span><code id="network-ip-numeric">••••••••</code><button id="network-toggle-numeric" class="icon-button" type="button" aria-label="显示 IP 数值" aria-pressed="false" title="显示或隐藏 IP 数值" disabled><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M2 12s4-6 10-6 10 6 10 6-4 6-10 6S2 12 2 12Z"/><circle cx="12" cy="12" r="3"/></svg></button></div></div>
+    </div>
+  </section>
+
+  <section id="network-degraded" class="network-caution" aria-label="降级来源说明" hidden><details><summary>部分来源使用缓存或降级资料</summary><div id="network-degraded-details"></div></details></section>
+  <section id="network-evidence-warning" class="network-caution network-caution-action" aria-label="证据状态说明" hidden><div><strong>来源不足或仅有缓存，当前结论需要结合证据查看。</strong><p>可展开逐源资料确认时间与状态，或稍后重新检测。</p></div><button id="network-recheck" class="button button-secondary" type="button">重新检测</button></section>
+
+  <div class="network-explain-row"><details><summary>什么是 IP 纯净度？分数怎么来的</summary><p>风险值来自 IPOK 汇总的来源证据，范围为 0–100。低分只表示此次返回的不利证据较弱，证据不足时不展示总分。<a href="https://ipok.io/methodology" target="_blank" rel="noopener noreferrer">查看评分方法 ↗</a></p></details><details><summary>隐私与检测范围</summary><p>请求由浏览器直接发往 IPOK，不携带账号、密码、2FA 或 Token。这里不会自动进行 WebRTC、DNS 泄漏等额外探测；登录表单中的代理也不会改变当前浏览器出口。</p></details></div>
+
+  <section class="network-data-panel" aria-labelledby="network-geo-heading"><div class="network-panel-heading"><h2 id="network-geo-heading">归属地与网络信息</h2><span id="network-location" class="network-secondary">待检测</span></div><dl class="network-geo-list"><div><dt>国家 / 地区</dt><dd id="network-country">—</dd></div><div><dt>省 / 州</dt><dd id="network-region">—</dd></div><div><dt>城市</dt><dd id="network-city">—</dd></div><div><dt>时区</dt><dd id="network-timezone">—</dd></div><div><dt>经纬度</dt><dd id="network-coordinates">—</dd></div><div><dt>ISP</dt><dd id="network-isp">—</dd></div><div><dt>组织</dt><dd id="network-org">—</dd></div><div><dt>ASN</dt><dd id="network-asn">—</dd></div><div><dt>反向解析</dt><dd id="network-reverse">—</dd></div></dl></section>
+
+  <section class="network-data-panel" aria-labelledby="network-sources-heading"><div class="network-panel-heading"><h2 id="network-sources-heading">逐源证据</h2><span>返回状态、风险值与资料时间</span></div><p id="network-evidence" class="network-secondary" hidden></p><dl id="network-details" class="network-details" aria-label="逐源检测资料"></dl></section>
+  <section class="network-data-panel" aria-labelledby="network-breakdown-heading"><div class="network-panel-heading"><h2 id="network-breakdown-heading">评分依据</h2><span>保留来源提供的权重与风险下限</span></div><div id="network-score-breakdown" class="network-breakdown"><p class="network-secondary">来源尚未返回评分明细。</p></div></section>
+  <section class="network-data-panel" aria-labelledby="network-regions-heading"><div class="network-panel-heading"><h2 id="network-regions-heading">地区支持参考</h2><span>地区资料快照，不是实时解锁测试</span></div><h3 class="network-snapshot-label">AI 与应用</h3><div id="network-services" class="network-service-grid"><p class="network-secondary">暂无来源资料</p></div><h3 class="network-snapshot-label">流媒体</h3><div id="network-media" class="network-service-grid"><p class="network-secondary">暂无来源资料</p></div></section>
+
+  <section class="network-meta-panel" aria-label="检测时间与额度"><div><span>更新时间</span><time id="network-updated">尚未完成检测</time></div><div><span>本地缓存</span><span id="network-cached-at">暂无缓存</span></div><div><span>查询额度</span><span id="network-quota">来源未提供</span></div></section>
+  <section id="network-source-panel" class="network-source-panel" aria-labelledby="network-source-heading"><div class="network-source-copy"><h2 id="network-source-heading">数据来源 IPOK</h2><p>当前浏览器的网络出口与登录表单中配置的代理相互独立。切换浏览器或系统网络后，可重新检测当前出口。</p></div><a id="network-open-ipok" class="button button-secondary" href="https://ipok.io/" target="_blank" rel="noopener noreferrer">打开 IPOK 原始页面 ↗</a></section>
+{% endblock %}

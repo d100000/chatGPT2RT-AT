@@ -1,9 +1,10 @@
 # chatGPT2RT-AT
 
-一个面向已有 ChatGPT 账号的 Token 提取工具。输入**邮箱、密码和 Authenticator 2FA 密钥**，完成登录后保存 **AT、RT 和 ID Token**，支持本地网页批量处理、命令行和 Python 调用。
+一个面向已有 ChatGPT 账号的本地工作台，包含 **Token 获取、CPA ↔ Sub2API 格式转换、IP 纯净度检测**。输入邮箱、密码和 Authenticator 2FA 密钥后，保存完整 **AT、RT 和 ID Token**，并自动生成 CPA 与 Sub2API 文件；也支持处理已有认证文件、命令行和 Python 调用。
 
 ```text
-邮箱 + 密码 + 2FA → 登录验证 → 获取 AT / RT / ID Token → 查看、复制或导出
+邮箱 + 密码 + 2FA → 登录验证 → 获取 AT / RT / ID Token → 原始 JSON / Sub2API / CPA
+已有认证 JSON → 浏览器本地转换 → CPA 单文件 / CPA ZIP / Sub2API JSON
 ```
 
 ## 功能概览
@@ -15,7 +16,10 @@
 | 并发处理 | 默认同时处理 2 个账号，可选 1～3 个；空出名额后自动处理下一个账号 |
 | 验证码交互 | 使用 2FA 密钥生成动态码；遇到额外邮箱验证时，在对应账号下手动输入验证码 |
 | 查看与复制 RT | 成功账号旁提供「查看 RT」按钮，可显示完整内容、复制或关闭隐藏 |
-| 多种导出格式 | 支持 Sub2API JSON、原始 Token JSON、成功结果 ZIP，以及每行一个 RT 的文本 |
+| 多种导出格式 | 支持 Sub2API JSON、CPA JSON / ZIP、原始 Token JSON、成功结果 ZIP，以及每行一个 RT 的文本 |
+| 双向格式转换 | 独立页面支持 CPA 与 Sub2API 互转，兼容 Codex/OpenAI、Claude、Antigravity、Gemini；认证内容在浏览器内处理 |
+| 自动生成文件 | 每个账号成功后自动保存原始、CPA、Sub2API 三份 JSON；批次结束后自动打包成功账号的 CPA ZIP 和合并 Sub2API JSON |
+| IP 纯净度检测 | 浏览器自动调用 IPOK 官方接口，显示当前出口、官方风险值、纯净度标签和证据状态；共享侧栏摘要与独立详情页 |
 | 进度与取消 | 分别显示账号状态和运行记录；单个账号失败继续处理，取消整批后保留成功结果 |
 | 限流等待 | 收到 HTTP 429 后暂停启动后续账号，显示等待时间；已运行账号继续处理 |
 | 代理与独立调用 | 支持统一代理；提供单账号 CLI 和异步 Python API，可脱离原管理后台运行 |
@@ -35,6 +39,8 @@ python3 -m venv .venv
 
 启动后打开 [http://127.0.0.1:8765](http://127.0.0.1:8765)。
 
+桌面左侧、手机顶部提供三个功能入口：**Token 获取**（`/`）、**格式转换**（`/converter`）、**IP 检测**（`/network`）。切换工具不停止正在执行的提取任务；回到 Token 页可继续跟踪进度。
+
 Windows 创建虚拟环境时可使用 `python -m venv .venv`，后续将 `.venv/bin/python` 替换为 `.venv\Scripts\python.exe`。
 
 ### 网页使用流程
@@ -43,8 +49,52 @@ Windows 创建虚拟环境时可使用 `python -m venv .venv`，后续将 `.venv
 2. 选择「同时处理账号数」；默认 2，选择 1 为逐条处理。
 3. 根据需要在「连接设置」中填写统一代理地址，然后开始提取。
 4. 查看各账号的处理状态；如需邮箱验证码，在对应邮箱下输入。
-5. 账号成功后可立即查看 RT、复制 RT 或下载该账号的原始 JSON。
-6. 批次结束后，点击「下载 Sub2API JSON」合并导出成功账号，也可下载 ZIP 或 RT 文本。
+5. 账号成功后可立即查看 RT、复制 RT，或下载该账号的原始 JSON、CPA JSON。
+6. 批次结束后，CPA ZIP 与合并 Sub2API JSON 已自动保存，可直接下载，也可下载原始结果 ZIP 或 RT 文本。
+7. 点击「在转换工具中查看」，无需手动下载、重新上传；也可在转换页选择方向后点击「载入最近提取结果」。载入会替换当前转换结果，并保留原提取结果的套餐、刷新时间和有效期。
+
+## CPA ↔ Sub2API 格式转换
+
+点击网页顶部「格式转换」，或打开 [http://127.0.0.1:8765/converter](http://127.0.0.1:8765/converter)。选择转换方向后，导入已有 JSON；此流程不需要重新登录账号。
+
+1. 选择 `CPA → Sub2API` 或 `Sub2API → CPA`。
+2. 拖入多个 JSON 文件、通过文件选择器选择文件或目录，或粘贴 JSON。粘贴支持单个对象、连续 JSON、JSONL；CPA 方向也可粘贴账号数组。
+3. 查看每条结果及失败、跳过原因，按需预览或下载单个结果。无效账号不会阻止其他有效账号转换。
+4. CPA 转 Sub2API 可下载合并 JSON，也可导出拆分文件；超过 3 个拆分结果时打成 ZIP。Sub2API 转 CPA 将每个可转换账号拆为一个 CPA 文件，批量下载为 ZIP。
+
+每次最多处理 1000 个文件或账号，单个文件不超过 2 MiB，导入总量不超过 20 MiB。切换方向或清空后，需要重新导入转换。转换结果仅保留在当前页面内存中，刷新或关闭页面后需要重新导入；不会写入浏览器本地存储，也不会上传认证内容到服务端。
+
+### 转换功能与字段映射
+
+本功能移植并适配自 [CPA2sub2API](https://github.com/gtxx3600/CPA2sub2API)，参考版本为 [`42ff785`](https://github.com/gtxx3600/CPA2sub2API/commit/42ff785d5f3527e4050c02a0da51d4f7eb4f1180)。参考项目的核心是纯前端文件解析、认证字段映射与下载打包；其转换逻辑不调用平台认证接口，也不刷新 Token。
+
+| CPA 类型 | Sub2API 平台 | 主要转换内容 |
+| --- | --- | --- |
+| `codex`（或缺省类型） | `openai` | AT、RT、ID Token、邮箱、账号 / 用户 / 组织标识、套餐与有效期；可从 JWT claims 补充元数据 |
+| `claude` | `anthropic` | AT、RT、邮箱、有效期及可选 ID Token |
+| `antigravity` | `antigravity` | AT、RT、邮箱、项目 ID、套餐、Token 类型与有效期 |
+| `gemini` | `gemini` | 嵌套 `token` 对象中的认证字段、scope、有效期，以及项目 ID、auto / checked 标记 |
+
+转换仅导出已知可映射字段，缺失的可选字段会省略。代理、Sub2API 调度配置和未知扩展字段不会完整往返保留。CPA 转 Sub2API 的账号默认包含 `concurrency: 10`、`priority: 1`；合并文档采用 `sub2api-data` v1 格式。反向转换只处理可映射到 CPA 的 OAuth 账号，其他账号在页面列出跳过原因。JWT claims 仅用于整理元数据，不验证签名或认证状态；转换成功不代表凭据仍然有效。
+
+重复导入的相同 JSON 内容会显示为已跳过，不受文件名、排版或对象键顺序影响。同邮箱更换 Token 后仍可继续导入；清空结果或切换方向会重置去重记录。粘贴内容仅在全部转换成功后清空，出现错误或达到上限时保留输入供修正。
+
+本项目还兼容自身导出的原始 Token JSON，将 `chatgpt_account_id`、`expires_at`、`obtained_at` 分别映射到 CPA 的 `account_id`、`expired`、`last_refresh`。提取页提供的 CPA 下载直接使用已保存结果，并保留实际取得时间和 AT 到期时间。浏览器转换器补充了秒 / 毫秒时间戳处理、UTF-8 JWT 解码及 ZIP 文件名去重与路径清理。
+
+相关前端模块保留原 MIT 许可及来源，见 [THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md)。
+
+## IP 纯净度检测
+
+工作台打开时，浏览器直接请求 IPOK 官方自查接口 `https://ipok.io/api/ip`，无需密钥。侧栏展示摘要，`/network` 展示详细归属地、运营商、网络类型、风险信号、逐源证据和查询额度。所有数据注明 [IPOK](https://ipok.io/) 来源；接口约定见 [官方开发文档](https://ipok.io/developers)。
+
+IP 详情页采用与工作台一致的蓝白配色和统一控件，参考 IPOK 截图布局，以风险圆环和资料面板集中展示类型、风险信号、共享人数估计、来源原生标签、归属地、时区、经纬度、组织、ASN、反向解析、逐源标记、评分依据与地区支持快照。共享人数不是实测人数；原生标签只反映来源的国家一致性资料；地区支持快照不是实时解锁测试。缺失字段显示「未知」，没有当前有效分数时圆环不显示数值。
+
+可填写公网 IPv4 / IPv6 查询指定地址，留空检测当前浏览器出口；试填地址按钮仅填写输入框，不自动请求。指定目标不会覆盖侧栏当前出口或自查缓存。支持复制显示的 IP，以及显隐其十进制数值。指定查询可能受到 IPOK 自身的验证和额度限制，页面会显示对应状态并保留来源入口。
+
+- 检测对象是**当前浏览器出口**。Token 获取表单中的统一代理只影响 Python 登录请求，不改变浏览器出口。
+- 风险值为 0–100，越低表示已返回的不利证据越弱；不将其反转为“纯净度百分比”。官方不提供当前有效评分时显示「证据不足」，有限证据和商业来源仅有缓存时也会注明。
+- 同一标签页跨工具复用 10 分钟内的检测资料，支持手动重新检测。IPOK 自查有每日额度；429 时按照 `Retry-After` 等待，无有效值时等待 60 秒。请求 20 秒超时，失败时清空旧分数并提供重试入口。
+- 仅 IP 检测事实及限流冷却时间保存于会话缓存；不会向 IPOK 发送账号、密码、2FA、Token 或本地页面凭据。认证文件转换与 IP 请求相互独立。
 
 ## 账号输入格式
 
@@ -90,7 +140,9 @@ user2@example.com----YOUR_PASSWORD----YOUR_BASE32_SECRET
 | --- | --- | --- |
 | 查看 RT / 复制 RT | 单个账号成功后 | 该账号完整的 Refresh Token，关闭后隐藏并清空显示内容 |
 | 原始 JSON | 单个账号成功后 | AT、RT、ID Token、有效期和账号元数据 |
+| CPA JSON | 单个账号成功后 | 可供 CPA 使用的 `codex` 认证文件，包含完整 Token、邮箱及可用的账号 / 套餐 / 时间字段 |
 | Sub2API JSON | 批次完成或取消后，且至少有一个成功账号 | 将成功账号合并为一个 `sub2api-data` 文件 |
+| CPA ZIP | 同上 | 每个成功账号一个 CPA JSON，按输入顺序打包，不包含失败账号及原始结果 manifest |
 | 原始结果 ZIP | 同上 | 每个成功账号的 JSON，以及包含所有账号行号、邮箱、状态的 `manifest.json` |
 | RT 文本 | 同上 | 仅成功账号的 RT，每行一个 |
 
@@ -102,10 +154,14 @@ user2@example.com----YOUR_PASSWORD----YOUR_BASE32_SECRET
 output/
 └── batch-<批次ID>/
     ├── tokens-<任务ID>.json
+    ├── codex-<任务ID>.json
+    ├── sub2api-<任务ID>.json
+    ├── cpa-<批次ID>.zip
+    ├── sub2api-<批次ID>.json
     └── batch-state.json
 ```
 
-`batch-state.json` 在批次结束后保存状态，不包含 Token 正文。输出目录可通过 `--output-dir` 修改；不指定时默认为 `rt-output/`。
+前三类文件在每个账号成功时自动生成；两类批量文件在批次结束或取消后，仅对成功账号自动生成。保存使用原子写入及 POSIX `0600` 权限。自动转换失败会明确显示，原始结果保留。`batch-state.json` 在批次结束后保存状态，不包含 Token 正文。输出目录可通过 `--output-dir` 修改；不指定时默认为 `rt-output/`。
 
 <details>
 <summary>原始 Token JSON 示例</summary>
@@ -266,7 +322,13 @@ asyncio.run(main())
 .venv/bin/python -m unittest discover -s tests -v
 ```
 
-测试使用合成账号和模拟网络，覆盖登录协议、保存、网页交互接口、并发调度、验证码、取消、限流和导出，不会登录真实账号。
+转换模块测试使用 Node.js（推荐 22+）：
+
+```bash
+node --test tests/*.mjs
+```
+
+测试使用合成账号和模拟网络，覆盖登录协议、保存、网页交互接口、并发调度、验证码、取消、限流、CPA / Sub2API 导出，以及前端双向字段映射、粘贴解析、时间戳与 ZIP 打包，不会登录真实账号。Node.js 仅为运行前端模块测试所需，使用浏览器转换页面不需要安装 Node.js。
 
 ```text
 chatGPT2RT-AT/

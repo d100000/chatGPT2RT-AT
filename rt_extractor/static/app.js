@@ -353,7 +353,19 @@
         download.textContent = '原始 JSON ↓';
         download.setAttribute('aria-label', `下载 ${row.email} 的原始 Token JSON`);
         download.addEventListener('click', () => downloadFile(`/api/jobs/${encodeURIComponent(row.id)}/download`, row.result.filename || 'tokens.json', download));
-        actions.append(view, download);
+        const cpa = document.createElement('button');
+        cpa.type = 'button';
+        cpa.className = 'row-download';
+        cpa.textContent = 'CPA JSON ↓';
+        cpa.setAttribute('aria-label', `下载 ${row.email} 的 CPA 认证 JSON`);
+        cpa.addEventListener('click', () => downloadFile(`/api/jobs/${encodeURIComponent(row.id)}/cpa-download`, `codex-${row.id}.json`, cpa));
+        const sub2api = document.createElement('button');
+        sub2api.type = 'button';
+        sub2api.className = 'row-download';
+        sub2api.textContent = 'Sub2API JSON ↓';
+        sub2api.setAttribute('aria-label', `下载 ${row.email} 的 Sub2API JSON`);
+        sub2api.addEventListener('click', () => downloadFile(`/api/jobs/${encodeURIComponent(row.id)}/sub2api-download`, `sub2api-${row.id}.json`, sub2api));
+        actions.append(view, cpa, sub2api, download);
         result.append(actions);
       } else {
         const empty = document.createElement('span');
@@ -374,6 +386,7 @@
       if (currentBatch && activeStates.has(currentBatch.status)) byId('concurrency').value = String(currentBatch.concurrency || 2);
     }
     batch = currentBatch;
+    document.dispatchEvent(new CustomEvent('rt:batch', { detail: batch }));
     updateControls();
     const counts = batch?.counts || { total: 0, queued: 0, running: 0, awaiting_code: 0, success: 0, error: 0, cancelled: 0 };
     const completed = counts.success + counts.error + counts.cancelled;
@@ -405,6 +418,24 @@
     const downloadable = !!batch?.result && counts.success > 0 && ['completed', 'cancelled'].includes(batch.status);
     byId('downloads').hidden = !downloadable;
     byId('result-path').textContent = downloadable ? batch.result.directory || '' : '';
+    const conversionStatus = byId('conversion-status');
+    const conversionState = batch?.result?.conversion_status;
+    const conversionHeading = byId('conversion-heading');
+    const conversionBadge = byId('conversion-badge');
+    if (conversionHeading) conversionHeading.textContent = conversionState === 'ready'
+      ? 'CPA / Sub2API 已自动生成' : conversionState === 'error' ? '自动保存未完成' : '成功结果与导出';
+    if (conversionBadge) {
+      conversionBadge.textContent = conversionState === 'ready' ? '已保存' : conversionState === 'error' ? '可按需下载' : '可导出';
+      conversionBadge.className = `job-badge ${conversionState === 'error' ? 'error' : 'success'}`;
+    }
+    if (conversionStatus) {
+      conversionStatus.textContent = !downloadable ? '' : batch.result.conversion_status === 'ready'
+        ? 'CPA 和 Sub2API 已自动生成并保存，可直接下载。'
+        : batch.result.conversion_status === 'error'
+          ? batch.result.conversion_error || '自动保存未完成，仍可从已成功账号按需下载。'
+          : '这是此前保存的批次，可按需生成 CPA 和 Sub2API 下载。';
+      conversionStatus.classList.toggle('failed', batch?.result?.conversion_status === 'error');
+    }
   }
 
   function schedulePoll(delay = 1000) {
@@ -541,6 +572,11 @@
     if (!batch?.result) return;
     const selected = batch;
     downloadFile(`/api/batches/${encodeURIComponent(selected.id)}/sub2api-download`, `sub2api-${selected.id}.json`, byId('sub2api-button'));
+  });
+  byId('cpa-button').addEventListener('click', () => {
+    if (!batch?.result) return;
+    const selected = batch;
+    downloadFile(`/api/batches/${encodeURIComponent(selected.id)}/cpa-download`, `cpa-${selected.id}.zip`, byId('cpa-button'));
   });
   byId('zip-button').addEventListener('click', () => {
     if (!batch?.result) return;

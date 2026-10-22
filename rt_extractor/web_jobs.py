@@ -5,6 +5,7 @@ import asyncio
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
 import hmac
+import json
 import math
 from pathlib import Path
 import re
@@ -14,7 +15,9 @@ from typing import Any, Callable
 import uuid
 
 from .api import ExtractionError, _validate_proxy
+from .cpa import build_cpa_record, save_export
 from .storage import save_tokens
+from .sub2api import build_sub2api_export
 from ._protocol.login import ProtocolError, RateLimitedError
 from ._protocol.totp import normalize_totp_secret
 
@@ -23,6 +26,20 @@ ACTIVE = {"queued", "running", "awaiting_code"}
 
 def _now() -> str:
     return datetime.now(timezone.utc).isoformat(timespec="seconds")
+
+
+def converted_result(job_id: str, directory: Path) -> dict[str, str]:
+    """Build paths and URLs solely from manager-owned identifiers."""
+    cpa = directory / f"codex-{job_id}.json"
+    sub2api = directory / f"sub2api-{job_id}.json"
+    ready = all(path.is_file() and not path.is_symlink() for path in (cpa, sub2api))
+    return {
+        "conversion_status": "ready" if ready else "not_saved",
+        "cpa_filename": cpa.name, "cpa_path": str(cpa),
+        "cpa_url": f"/api/jobs/{job_id}/cpa-download",
+        "sub2api_filename": sub2api.name, "sub2api_path": str(sub2api),
+        "sub2api_url": f"/api/jobs/{job_id}/sub2api-download",
+    }
 
 
 @dataclass
@@ -171,13 +188,34 @@ class JobManager:
                     raise asyncio.CancelledError
                 output = (job.output_dir or self.output_dir) / f"tokens-{job.id}.json"
                 save_tokens(result, output)
+                self._event(job, "converting", "Token 已获取，正在自动生成 CPA 和 Sub2API 文件")
+                generated = []
+                try:
+                    payload = result.to_dict()
+                    documents = (
+                        (output.parent / f"codex-{job.id}.json", build_cpa_record(payload)),
+                        (output.parent / f"sub2api-{job.id}.json", build_sub2api_export([payload])),
+                    )
+                    for target, document in documents:
+                        data = (json.dumps(document, ensure_ascii=False, indent=2) + "\n").encode("utf-8")
+                        generated.append(save_export(data, target))
+                except Exception:
+                    for path in generated:
+                        try:
+                            path.unlink(missing_ok=True)
+                        except OSError:
+                            # A permission change must not hide the conversion
+                            # failure or prevent publishing its safe error state.
+                            pass
+                    raise ExtractionError("Token 已获取，但 CPA / Sub2API 自动生成失败；原始结果已保存在输出目录，请检查目录权限") from None
                 job.result = {
                     "filename": output.name, "path": str(output),
                     "download_url": f"/api/jobs/{job.id}/download",
                     "obtained_at": result.obtained_at, "expires_at": result.expires_at,
+                    **converted_result(job.id, output.parent),
                 }
                 job.status = "success"
-                self._event(job, "success", "AT、RT 和 ID Token 已完整保存")
+                self._event(job, "success", "Token 已保存，CPA 和 Sub2API 文件已自动生成")
 
         try:
             asyncio.run(execute())
