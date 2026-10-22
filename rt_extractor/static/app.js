@@ -1,3 +1,5 @@
+import { createRequestCooldowns, rateLimitError, requestLimitAction } from './request-limits.mjs';
+
 (() => {
   'use strict';
   const byId = (id) => document.getElementById(id);
@@ -14,6 +16,12 @@
   let cancelling = false;
   let pollTimer = null;
   let pollRequest = 0;
+  let pollPending = false;
+  let initializePending = false;
+  let initializeTimer = null;
+  let cooldownTimer = null;
+  const cooldowns = createRequestCooldowns({ now: () => Date.now() });
+  const coolingDownloads = new Set();
   const activeEntries = new Map();
   let lastRows = '';
   let networkNotice = false;
@@ -40,6 +48,9 @@
   }
 
   async function request(path, options = {}) {
+    const action = requestLimitAction(path, options.method || 'GET');
+    const remaining = cooldowns.remaining(action);
+    if (remaining) throw rateLimitError(null, { retry_after: remaining });
     let response;
     try {
       response = await fetch(path, {
@@ -54,12 +65,32 @@
     connection(true);
     if (!response.ok) {
       const payload = await response.json().catch(() => ({}));
+      if (response.status === 429) {
+        const error = rateLimitError(response, payload);
+        cooldowns.hold(action, error.retryAfter);
+        refreshCooldownControls();
+        throw error;
+      }
       const error = new Error(payload.error || `请求失败（${response.status}），请重试。`);
       error.status = response.status;
       error.errors = Array.isArray(payload.errors) ? payload.errors : [];
       throw error;
     }
     return response;
+  }
+
+  function refreshCooldownControls() {
+    clearTimeout(cooldownTimer);
+    updateControls();
+    const retry = byId('rt-retry-button');
+    const downloadRemaining = cooldowns.remaining('download');
+    retry.disabled = downloadRemaining > 0;
+    retry.textContent = downloadRemaining ? `${downloadRemaining} 秒后重试` : '重试';
+    for (const button of coolingDownloads) {
+      button.disabled = downloadRemaining > 0;
+      if (!downloadRemaining) coolingDownloads.delete(button);
+    }
+    if (cooldowns.active()) cooldownTimer = setTimeout(refreshCooldownControls, 1000);
   }
 
   async function jsonRequest(path, options) {
@@ -81,19 +112,22 @@
     const stopping = cancelling || batch?.status === 'cancelling';
     const busy = active || submitting || importing || initializing;
     byId('credentials-fields').disabled = busy;
-    byId('start-button').disabled = busy;
-    byId('start-label').textContent = importing ? '正在读取文件…' : submitting ? '正在提交…' : active ? '批次进行中…' : batch ? '开始新批次' : '开始批量提取';
+    const submitRemaining = cooldowns.remaining('submit');
+    const cancelRemaining = cooldowns.remaining('cancel');
+    byId('start-button').disabled = busy || submitRemaining > 0;
+    byId('start-label').textContent = importing ? '正在读取文件…' : submitting ? '正在提交…' : active ? '批次进行中…' : submitRemaining ? `${submitRemaining} 秒后可重试` : batch ? '开始新批次' : '开始批量提取';
     byId('cancel-button').hidden = !active;
-    byId('cancel-button').disabled = stopping;
-    byId('cancel-button').textContent = stopping ? '正在取消…' : '取消整批';
+    byId('cancel-button').disabled = stopping || cancelRemaining > 0;
+    byId('cancel-button').textContent = stopping ? '正在取消…' : cancelRemaining ? `${cancelRemaining} 秒后可取消` : '取消整批';
     for (const entry of activeEntries.values()) updateCodeControls(entry);
   }
 
   function updateCodeControls(entry) {
     const disabled = entry.submitting || cancelling || batch?.status === 'cancelling' || !entry.challengeId;
+    const remaining = cooldowns.remaining('code');
     entry.input.disabled = disabled;
-    entry.button.disabled = disabled;
-    entry.button.textContent = entry.submitting ? '验证中…' : '验证';
+    entry.button.disabled = disabled || remaining > 0;
+    entry.button.textContent = entry.submitting ? '验证中…' : remaining ? `${remaining} 秒后验证` : '验证';
   }
 
   function clearActiveJobs() {
@@ -157,7 +191,7 @@
     const entry = { section, email, badge, message, form, title, description, input, button, error, events, job, challengeId: null, submitting: false, eventsSignature: '' };
     form.addEventListener('submit', async (event) => {
       event.preventDefault();
-      if (entry.submitting || cancelling || batch?.status === 'cancelling' || !entry.challengeId) return;
+      if (entry.submitting || cancelling || batch?.status === 'cancelling' || !entry.challengeId || cooldowns.remaining('code')) return;
       const code = input.value.trim();
       if (!/^[0-9]{6}$/.test(code)) {
         error.textContent = '请输入 6 位数字验证码。';
@@ -440,11 +474,16 @@
 
   function schedulePoll(delay = 1000) {
     clearTimeout(pollTimer);
-    if (batch && activeStates.has(batch.status)) pollTimer = setTimeout(pollBatch, delay);
+    if (!document.hidden && batch && activeStates.has(batch.status)) pollTimer = setTimeout(pollBatch, Math.max(delay, cooldowns.delay('poll')));
   }
 
   async function pollBatch() {
-    if (!batch) return;
+    if (!batch || pollPending || document.hidden) return;
+    if (cooldowns.remaining('poll')) { schedulePoll(); return; }
+    clearTimeout(pollTimer);
+    pollPending = true;
+    let nextDelay = 1000;
+    let retry = true;
     const id = batch.id;
     const generation = ++pollRequest;
     try {
@@ -454,12 +493,15 @@
         render(current);
         if (networkNotice) { showError(''); networkNotice = false; }
       }
-      schedulePoll();
     } catch (error) {
       if (batch?.id !== id || generation !== pollRequest) return;
       networkNotice = true;
-      showError(error.status === 403 ? error.message : `${error.message} 正在重新获取批次状态。`);
-      if (error.status !== 403) schedulePoll(3000);
+      showError(error.status === 403 || error.status === 429 ? error.message : `${error.message} 正在重新获取批次状态。`);
+      nextDelay = error.status === 429 ? error.retryAfter * 1000 : 3000;
+      retry = error.status !== 403;
+    } finally {
+      pollPending = false;
+      if (retry) schedulePoll(nextDelay);
     }
   }
 
@@ -477,7 +519,12 @@
       link.remove();
       setTimeout(() => URL.revokeObjectURL(url), 1000);
     } catch (error) { showError(error.message); }
-    finally { button.disabled = false; }
+    finally {
+      if (cooldowns.remaining('download')) {
+        coolingDownloads.add(button);
+        refreshCooldownControls();
+      } else button.disabled = false;
+    }
   }
 
   byId('accounts-text').addEventListener('input', () => { updateCount(); byId('file-name').textContent = ''; });
@@ -532,7 +579,7 @@
 
   byId('batch-form').addEventListener('submit', async (event) => {
     event.preventDefault();
-    if (submitting || importing || initializing || (batch && activeStates.has(batch.status))) return;
+    if (submitting || importing || initializing || cooldowns.remaining('submit') || (batch && activeStates.has(batch.status))) return;
     const count = inputCount();
     if (!count) { showError('请粘贴账号列表或导入 .txt 文件。'); return; }
     if (count > maxAccounts) { showError('每批最多 1,000 条账号，请拆分后提交。'); return; }
@@ -590,6 +637,13 @@
   });
 
   async function initialize() {
+    if (initializePending || document.hidden) return;
+    clearTimeout(initializeTimer);
+    if (cooldowns.remaining('poll')) {
+      initializeTimer = setTimeout(initialize, cooldowns.delay('poll'));
+      return;
+    }
+    initializePending = true;
     try {
       const payload = await jsonRequest('/api/batches/current');
       render(payload.batch || null);
@@ -598,10 +652,18 @@
       updateControls();
       schedulePoll();
     } catch (error) {
-      showError(error.status === 403 ? error.message : `${error.message} 正在重新连接。`);
-      if (error.status !== 403) setTimeout(initialize, 3000);
+      showError(error.status === 403 || error.status === 429 ? error.message : `${error.message} 正在重新连接。`);
+      if (error.status !== 403) initializeTimer = setTimeout(initialize, error.status === 429 ? error.retryAfter * 1000 : 3000);
+    } finally {
+      initializePending = false;
     }
   }
+  document.addEventListener('visibilitychange', () => {
+    if (!document.hidden) {
+      refreshCooldownControls();
+      if (initializing) initialize(); else schedulePoll(0);
+    } else clearTimeout(pollTimer);
+  });
   updateCount();
   initialize();
 })();

@@ -11,6 +11,7 @@ import unittest
 
 from rt_extractor.api import TokenBundle
 from rt_extractor.web import create_app
+from rt_extractor.abuse import AbusePolicy, ClientPolicy, Quota
 
 
 SECRET = "JBSWY3DPEHPK3PXP"
@@ -71,7 +72,14 @@ class ConcurrentBatchTests(unittest.TestCase):
                 with self.lock:
                     self.active -= 1
 
-        self.app = create_app(self.output, extractor=dispatch)
+        # This scheduler harness polls every 10 ms and validates eight invalid
+        # submissions in one window. Keep limits on with explicit test budgets.
+        self.app = create_app(self.output, extractor=dispatch,
+                              abuse_policy=AbusePolicy(
+                                  burst=Quota(1000, 1), global_burst=Quota(1000, 1),
+                                  device=ClientPolicy(burst=Quota(1000, 1), submissions=Quota(10, 60)),
+                                  session=ClientPolicy(burst=Quota(1000, 1), submissions=Quota(10, 60)),
+                              ))
         self.app.config["TESTING"] = True
         self.client = self.app.test_client()
         self.headers = {"X-RT-CSRF": self.app.config["RT_CSRF_TOKEN"]}

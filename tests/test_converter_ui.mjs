@@ -11,6 +11,7 @@ import vm from 'node:vm';
 import * as converter from '../rt_extractor/static/converter.mjs';
 import * as archive from '../rt_extractor/static/archive.mjs';
 import * as pasteParser from '../rt_extractor/static/paste-input.mjs';
+import * as requestLimits from '../rt_extractor/static/request-limits.mjs';
 
 class Element {
   constructor(tagName = 'div') {
@@ -74,9 +75,13 @@ function createPage(options = {}) {
   const source = readFileSync(new URL('../rt_extractor/static/converter-ui.mjs', import.meta.url), 'utf8')
     .replace(/^import[^\n]*\n/gm, '');
   const context = vm.createContext({
-    document, TextEncoder, Blob, URL, Error, setTimeout, crypto: webcrypto,
+    document, TextEncoder, Blob, URL, Error,
+    Date: options.Date || Date,
+    setTimeout: options.setTimeout || setTimeout,
+    clearTimeout: options.clearTimeout || clearTimeout,
+    crypto: webcrypto,
     fetch: options.fetch || (async () => { throw new Error('Unexpected network request'); }),
-    ...converter, ...archive, ...pasteParser,
+    ...converter, ...archive, ...pasteParser, ...requestLimits,
   });
   vm.runInContext(source, context, { filename: 'converter-ui.mjs' });
   return {
@@ -301,3 +306,36 @@ for (const [name, routes] of [
     assert.equal(page.byId('converter-origin').hidden, true);
   });
 }
+
+test('latest-source 429 preserves imported results and pasted input, and does not automatically retry', async () => {
+  let now = Date.now(), timer, requests = 0;
+  const page = createPage({
+    Date: class extends Date { static now() { return now; } },
+    setTimeout(callback, delay) {
+      if (!delay) return setTimeout(callback, 0);
+      timer = callback; return 'synthetic-cooldown';
+    },
+    clearTimeout(id) { if (id === 'synthetic-cooldown') timer = undefined; else clearTimeout(id); },
+    fetch: async () => {
+      requests += 1;
+      return { ok: false, status: 429, headers: { get: () => '15' }, json: async () => ({ error: '载入过于频繁', retry_after: 20 }) };
+    },
+  });
+  await page.paste(JSON.stringify(account('existing')));
+  const input = JSON.stringify(account('pending'));
+  page.byId('converter-json').value = input;
+  await page.byId('converter-json').dispatch('input');
+  await page.byId('converter-use-latest').click();
+  assert.equal(requests, 1);
+  assert.equal(page.count('convert-count-success'), 1);
+  assert.equal(page.byId('converter-json').value, input);
+  assert.match(page.byId('converter-error').textContent, /载入过于频繁.*20 秒/);
+  assert.equal(page.byId('converter-use-latest').disabled, true);
+  await page.byId('converter-use-latest').click(); assert.equal(requests, 1);
+  // Local-only conversion remains available during server-source cooling.
+  await page.byId('convert-paste-button').click();
+  assert.equal(page.count('convert-count-success'), 2);
+  now += 20_000; timer();
+  assert.equal(page.byId('converter-use-latest').disabled, false);
+  assert.equal(requests, 1);
+});

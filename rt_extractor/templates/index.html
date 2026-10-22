@@ -4,7 +4,7 @@
 {% block page_id %}extractor{% endblock %}
 {% block tool_name %}Token 获取{% endblock %}
 {% block connection_label %}连接本地服务{% endblock %}
-{% block scripts %}<script src="{{ url_for('static', filename='app.js') }}" defer></script>{% endblock %}
+{% block scripts %}<script type="module" src="{{ url_for('static', filename='app.js') }}"></script>{% endblock %}
 {% block content %}
     <div class="page-heading"><div><p class="eyebrow">TOKEN EXTRACTION</p><h1>获取 Token，一次完成转换</h1><p class="page-description">登录已有账号，提取完整 Token，并自动生成 CPA 和 Sub2API 认证文件。</p></div><span class="local-badge">已有账号登录</span></div>
     {% include "privacy_notice.html" %}

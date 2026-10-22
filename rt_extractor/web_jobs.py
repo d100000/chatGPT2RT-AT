@@ -249,10 +249,18 @@ def _credentials(payload: Any) -> dict:
     if set(payload) - {"email", "password", "totp_secret", "proxy", "timeout"}:
         raise ValueError("请求包含不支持的字段")
     email, password = payload.get("email"), payload.get("password")
-    if not isinstance(email, str) or not re.fullmatch(r"[^\s@]+@[^\s@]+", email.strip()):
+    if (not isinstance(email, str) or len(email) > 320
+            or not re.fullmatch(r"[^\s@]+@[^\s@]+", email.strip())):
         raise ValueError("请输入有效的账号邮箱")
     if not isinstance(password, str) or not password:
         raise ValueError("账号密码不能为空")
+    if len(password) > 4096:
+        raise ValueError("账号密码长度超过上限")
+    try:
+        email.encode("utf-8")
+        password.encode("utf-8")
+    except UnicodeEncodeError:
+        raise ValueError("账号信息包含无效字符，请使用 UTF-8 文本") from None
     timeout = payload.get("timeout", 180)
     if (isinstance(timeout, bool) or not isinstance(timeout, (float, int))
             or not math.isfinite(timeout) or not 1 <= timeout <= 600):
@@ -263,6 +271,12 @@ def _credentials(payload: Any) -> dict:
         if value is not None:
             if not isinstance(value, str):
                 raise ValueError("2FA 密钥和代理地址必须为文本")
+            if len(value) > (4096 if key == "totp_secret" else 2048):
+                raise ValueError("2FA 密钥或代理地址长度超过上限")
+            try:
+                value.encode("utf-8")
+            except UnicodeEncodeError:
+                raise ValueError("账号信息包含无效字符，请使用 UTF-8 文本") from None
             if value.strip():
                 values[key] = value.strip()
     if "totp_secret" in values:

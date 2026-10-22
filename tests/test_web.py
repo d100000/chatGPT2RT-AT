@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+from dataclasses import replace
 import json
 import os
 from pathlib import Path
@@ -13,6 +14,7 @@ import time
 import unittest
 
 from rt_extractor.api import TokenBundle
+from rt_extractor.abuse import AbusePolicy, Quota
 from rt_extractor.web import create_app
 
 
@@ -49,7 +51,12 @@ class WebTests(unittest.TestCase):
             finally:
                 self.finished.set()
 
-        self.app = create_app(output_dir=self.output_dir, extractor=dispatch)
+        # Input validation sends seven invalid requests in one window. Layered
+        # rate-limit enforcement is covered separately in test_browser_limits.
+        defaults = AbusePolicy()
+        self.app = create_app(output_dir=self.output_dir, extractor=dispatch,
+                              abuse_policy=replace(defaults, session=replace(
+                                  defaults.session, submissions=Quota(10, 60))))
         self.app.config.update(TESTING=True)
         self.client = self.app.test_client()
         self.headers = {"X-RT-CSRF": self.app.config["RT_CSRF_TOKEN"]}

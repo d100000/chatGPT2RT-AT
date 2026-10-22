@@ -8,20 +8,30 @@ import json
 from pathlib import Path
 import re
 import secrets
+import time
 from typing import Callable
 from urllib.parse import urlsplit
 
-from flask import Flask, jsonify, render_template, request, send_file
+from flask import Flask, g, jsonify, render_template, request, send_file
+from werkzeug.exceptions import RequestEntityTooLarge
 
+from .abuse import AbuseGuard, AbuseLimited, AbusePolicy, LeasedIterator
 from .api import extract_tokens
 from .batch import DEFAULT_CONCURRENCY, BatchInputError, BatchManager, parse_accounts
+from .browser_identity import BrowserIdentities
 from .cpa import build_cpa_record
 from .sub2api import build_sub2api_export
-from .web_jobs import JobManager, _credentials
+from .web_jobs import ACTIVE, JobManager, _credentials
 
-def create_app(output_dir: str | Path | None = None, extractor: Callable | None = None) -> Flask:
+def create_app(output_dir: str | Path | None = None, extractor: Callable | None = None, *,
+               abuse_policy: AbusePolicy | None = None, abuse_clock: Callable = time.monotonic) -> Flask:
     app = Flask(__name__)
-    app.config.update(MAX_CONTENT_LENGTH=3 * 1024 * 1024, RT_CSRF_TOKEN=secrets.token_urlsafe(32))
+    app.config.update(MAX_CONTENT_LENGTH=3 * 1024 * 1024, MAX_FORM_MEMORY_SIZE=16 * 1024,
+                      MAX_FORM_PARTS=10, RT_CSRF_TOKEN=secrets.token_urlsafe(32))
+    abuse = AbuseGuard(abuse_policy, abuse_clock)
+    app.extensions["rt_abuse"] = abuse
+    browser_identities = BrowserIdentities()
+    app.extensions["rt_browser_identities"] = browser_identities
     directory = Path(output_dir or Path.cwd() / "rt-output").expanduser().resolve()
     directory.mkdir(mode=0o700, parents=True, exist_ok=True)
     manager = JobManager(directory, extractor or extract_tokens)
@@ -29,8 +39,39 @@ def create_app(output_dir: str | Path | None = None, extractor: Callable | None 
     batches = BatchManager(manager)
     app.extensions["rt_batches"] = batches
 
+    exports = {"download", "view_rt", "download_cpa", "download_sub2api", "download_batch_zip",
+               "download_batch_rt", "download_batch_sub2api", "download_batch_cpa", "batch_conversion_source"}
+
+    def reject_access(message):
+        abuse.denied_access(g.abuse_identity)
+        return jsonify(error=message), 403
+
+    def admit_task(emails, start):
+        # Both managers share this RLock. Conflicts must not reserve account
+        # attempts, and failed starts refund every account as one transaction.
+        with manager.lock:
+            if manager.active_batch or any(job.status in ACTIVE for job in manager.jobs.values()):
+                raise ValueError("已有任务进行中，请先完成或取消当前任务")
+            reservation = abuse.reserve_accounts(g.abuse_identity, emails)
+            try:
+                return start()
+            except BaseException:
+                reservation.release()
+                raise
+
+    @app.errorhandler(AbuseLimited)
+    def too_frequent(error):
+        response = jsonify(error=str(error), retry_after=error.retry_after)
+        response.status_code = 429
+        response.headers["Retry-After"] = str(error.retry_after)
+        return response
+
     @app.before_request
     def guard():
+        browser = browser_identities.resolve(request.cookies)
+        g.abuse_identity = abuse.identity(request.remote_addr, browser.device, browser.session)
+        abuse.check_request(g.abuse_identity, control=request.endpoint in {"cancel", "cancel_batch"},
+                            static=request.endpoint == "static")
         try:
             host = urlsplit("http://" + request.host)
             local = (host.hostname in {"127.0.0.1", "localhost", "::1"}
@@ -39,14 +80,35 @@ def create_app(output_dir: str | Path | None = None, extractor: Callable | None 
         except ValueError:
             local = False
         if not local or request.remote_addr not in {"127.0.0.1", "::1"}:
-            return jsonify(error="此服务仅允许本机访问"), 403
+            return reject_access("此服务仅允许本机访问")
         origin = request.headers.get("Origin")
         if origin and origin != request.host_url.rstrip("/"):
-            return jsonify(error="请求来源不匹配"), 403
-        if request.path.startswith("/api/") and not hmac.compare_digest(
-            request.headers.get("X-RT-CSRF", "").encode(), app.config["RT_CSRF_TOKEN"].encode(),
-        ):
-            return jsonify(error="页面凭据已过期，请刷新页面"), 403
+            return reject_access("请求来源不匹配")
+        supplied_csrf = request.headers.get("X-RT-CSRF", "")
+        if request.path.startswith("/api/") and (len(supplied_csrf) > 128 or not hmac.compare_digest(
+            supplied_csrf.encode(), app.config["RT_CSRF_TOKEN"].encode(),
+        )):
+            return reject_access("页面凭据已过期，请刷新页面")
+        endpoint = request.endpoint
+        if endpoint in {"start", "start_batch"}:
+            abuse.check_action(g.abuse_identity, "submit")
+        elif endpoint == "code":
+            job_id = (request.view_args or {}).get("job_id")
+            with manager.lock:
+                known_job = job_id if job_id in manager.jobs else None
+            abuse.check_action(g.abuse_identity, "verify", job_id=known_job)
+        elif endpoint in exports:
+            abuse.check_action(g.abuse_identity, "export")
+            g.export_lease = abuse.acquire_export()
+        limits = {"start": 16 * 1024, "code": 4 * 1024, "cancel": 1024, "cancel_batch": 1024}
+        if endpoint in limits:
+            request.max_content_length = limits[endpoint]
+            if request.content_length is not None and request.content_length > limits[endpoint]:
+                raise RequestEntityTooLarge()
+        if (request.method == "GET" and endpoint in {"index", "converter", "network"}
+                and (browser.device is None or browser.session is None)):
+            abuse.check_identity_issuance(g.abuse_identity)
+            g.browser_cookies = browser_identities.resolve(request.cookies, issue=True).cookies
 
     @app.after_request
     def secure_headers(response):
@@ -58,7 +120,26 @@ def create_app(output_dir: str | Path | None = None, extractor: Callable | None 
             "img-src 'self' data:; connect-src 'self' https://ipok.io; base-uri 'none'; "
             "frame-ancestors 'none'; form-action 'self'"
         )
+        if response.status_code == 200:
+            for cookie in getattr(g, "browser_cookies", ()):
+                response.set_cookie(cookie.name, cookie.value, max_age=cookie.max_age,
+                                    httponly=True, secure=request.is_secure, samesite="Lax", path="/")
+            if getattr(g, "browser_cookies", ()):
+                response.vary.add("Cookie")
+        lease = getattr(g, "export_lease", None)
+        if lease is not None:
+            if 200 <= response.status_code < 300 and request.method != "HEAD":
+                response.response = LeasedIterator(response.response, lease)
+                g.export_lease_wrapped = True
+            else:
+                lease.release()
         return response
+
+    @app.teardown_request
+    def release_failed_export(_error):
+        lease = getattr(g, "export_lease", None)
+        if lease is not None and not getattr(g, "export_lease_wrapped", False):
+            lease.release()
 
     @app.errorhandler(413)
     def too_large(_error):
@@ -87,7 +168,10 @@ def create_app(output_dir: str | Path | None = None, extractor: Callable | None 
         except ValueError as exc:
             return jsonify(error=str(exc)), 400
         try:
-            return jsonify(manager.start(credentials)), 202
+            return jsonify(admit_task([credentials["email"]], lambda: manager.start(credentials))), 202
+        except AbuseLimited:
+            credentials.clear()
+            raise
         except ValueError as exc:
             credentials.clear()
             return jsonify(error=str(exc)), 409
@@ -108,7 +192,7 @@ def create_app(output_dir: str | Path | None = None, extractor: Callable | None 
             return jsonify(error="请输入验证码"), 400
         value, challenge_id = payload.get("code"), payload.get("challenge_id")
         if (not isinstance(value, str) or not re.fullmatch(r"[0-9]{6}", value.strip())
-                or not isinstance(challenge_id, str)):
+                or not isinstance(challenge_id, str) or len(challenge_id) > 128):
             return jsonify(error="验证码须为 6 位数字"), 400
         try:
             return jsonify(manager.submit_code(job_id, challenge_id, value.strip()))
@@ -205,7 +289,13 @@ def create_app(output_dir: str | Path | None = None, extractor: Callable | None 
         except BatchInputError as exc:
             return jsonify(error=str(exc), errors=exc.errors), 400
         try:
-            return jsonify(batches.start(accounts, concurrency=payload.get("concurrency", DEFAULT_CONCURRENCY))), 202
+            return jsonify(admit_task((data["email"] for _, data in accounts),
+                           lambda: batches.start(accounts, concurrency=payload.get("concurrency", DEFAULT_CONCURRENCY)))), 202
+        except AbuseLimited:
+            for _, credentials in accounts:
+                credentials.clear()
+            accounts.clear()
+            raise
         except ValueError as exc:
             for _, credentials in accounts:
                 credentials.clear()

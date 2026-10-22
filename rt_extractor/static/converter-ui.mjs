@@ -1,6 +1,7 @@
 import { convertCPARecord, convertSub2ApiDocument, buildMergedSub2ApiDocument, formatMergedPreview } from './converter.mjs';
 import { buildZipArchive, makeUniqueFileNames } from './archive.mjs';
 import { parsePastedJsonDocuments } from './paste-input.mjs';
+import { createRequestCooldowns, rateLimitError } from './request-limits.mjs';
 
 const byId = (id) => document.getElementById(id);
 const limits = { items: 1000, perDocument: 2 * 1024 * 1024, total: 20 * 1024 * 1024, preview: 24000 };
@@ -16,6 +17,14 @@ let totalBytes = 0;
 let busy = false;
 let dragging = 0;
 const seenInputs = new Set();
+const latestCooldown = createRequestCooldowns({ now: () => Date.now() });
+let latestCooldownTimer;
+
+function updateLatestCooldown() {
+  clearTimeout(latestCooldownTimer);
+  updateControls();
+  if (latestCooldown.remaining('latest')) latestCooldownTimer = setTimeout(updateLatestCooldown, 1000);
+}
 
 function showError(message = '') {
   byId('converter-error').textContent = message;
@@ -38,7 +47,11 @@ function updateControls() {
   byId('mode-sub2api').disabled = busy;
   byId('converter-clear').disabled = busy || (!rows.length && !byId('converter-json').value && !sourceCount);
   byId('convert-paste-button').disabled = busy || !byId('converter-json').value.trim();
-  if (byId('converter-use-latest')) byId('converter-use-latest').disabled = busy;
+  if (byId('converter-use-latest')) {
+    const remaining = latestCooldown.remaining('latest');
+    byId('converter-use-latest').disabled = busy || remaining > 0;
+    byId('converter-use-latest').textContent = remaining ? `${remaining} 秒后可载入` : '载入最近提取结果 ↗';
+  }
   for (const id of ['convert-merged', 'convert-split', 'convert-preview']) byId(id).disabled = busy;
   for (const button of byId('converter-results-body').querySelectorAll('button')) button.disabled = busy;
 }
@@ -281,6 +294,7 @@ function setMode(next, internal = false) {
 }
 
 async function loadLatestExtraction() {
+  if (latestCooldown.remaining('latest')) return;
   await perform(async () => {
     const csrf = document.querySelector('meta[name="rt-csrf"]')?.content;
     if (!csrf) { showError('本地页面凭据缺失，请刷新后重试。'); return; }
@@ -288,6 +302,12 @@ async function loadLatestExtraction() {
       const response = await fetch(path, {
         credentials: 'same-origin', cache: 'no-store', headers: { 'X-RT-CSRF': csrf },
       });
+      if (response.status === 429) {
+        const error = rateLimitError(response, await response.json().catch(() => ({})));
+        latestCooldown.hold('latest', error.retryAfter);
+        updateLatestCooldown();
+        throw error;
+      }
       if (!response.ok) throw new Error('local-request-failed');
       return response.json();
     };
@@ -311,8 +331,8 @@ async function loadLatestExtraction() {
         source = { accounts: [await localJson(`/api/jobs/${encodeURIComponent(job.id)}/cpa-download`)] };
         label = `最近提取账号 · ${job.email}`;
       }
-    } catch {
-      showError('无法读取最近提取结果，请确认本地服务正在运行，刷新页面后重试。'); return;
+    } catch (error) {
+      showError(error.status === 429 ? error.message : '无法读取最近提取结果，请确认本地服务正在运行，刷新页面后重试。'); return;
     }
     const bytes = encoder.encode(JSON.stringify(source)).length;
     if (!Array.isArray(source?.accounts) || !source.accounts.length || source.accounts.length > limits.items || bytes > limits.total) {
