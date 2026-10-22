@@ -1,0 +1,25 @@
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "account-rt-extractor"
+version = "0.1.0"
+description = "Standalone account password and TOTP login with complete OAuth token export"
+readme = "README.md"
+requires-python = ">=3.10"
+dependencies = ["httpx[socks]>=0.28,<1", "curl_cffi>=0.7,<1"]
+
+[project.optional-dependencies]
+web = ["flask>=3.1,<4"]
+
+[project.scripts]
+rt-extractor = "rt_extractor.__main__:main"
+rt-extractor-web = "rt_extractor.web:main"
+
+[tool.setuptools]
+packages = ["rt_extractor", "rt_extractor._protocol"]
+
+[tool.setuptools.package-data]
+"rt_extractor" = ["templates/*.html", "static/*.css", "static/*.js"]
+"rt_extractor._protocol" = ["*.js"]

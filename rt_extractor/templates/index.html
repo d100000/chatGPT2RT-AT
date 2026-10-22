@@ -1,0 +1,57 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="rt-csrf" content="{{ csrf_token }}">
+  <title>批量 RT 提取 · 本地工作台</title>
+  <link rel="stylesheet" href="{{ url_for('static', filename='app.css') }}">
+  <script src="{{ url_for('static', filename='app.js') }}" defer></script>
+</head>
+<body>
+  <header class="topbar">
+    <a class="brand" href="/" aria-label="RT 提取工作台首页"><span class="brand-mark">RT<span>↗</span></span><span>账号工作台</span></a>
+    <div class="connection" id="connection"><span class="status-dot"></span><span id="connection-label">连接本地服务</span></div>
+  </header>
+  <main class="workspace">
+    <div class="page-heading"><div><p class="eyebrow">BATCH TOKEN EXTRACTOR</p><h1>批量提取账号 Token</h1><p class="page-description">每行一个账号，并发提取 AT、RT 和 ID Token，合并导出 Sub2API JSON。</p></div><span class="local-badge">本地运行</span></div>
+    <div class="workbench">
+      <section class="input-pane" aria-labelledby="import-heading">
+        <div class="section-heading"><h2 id="import-heading">导入账号</h2><span class="section-caption">最多 1,000 条</span></div>
+        <form id="batch-form">
+          <fieldset id="credentials-fields">
+            <legend class="sr-only">批量账号信息</legend>
+            <div class="import-toolbar"><label for="accounts-text">账号列表</label><button class="text-button" id="import-button" type="button">导入 .txt 文件</button><input id="accounts-file" class="sr-only" type="file" accept=".txt,text/plain" tabindex="-1" aria-label="选择账号文本文件"></div>
+            <textarea id="accounts-text" name="accounts_text" rows="10" required spellcheck="false" autocomplete="off" autocapitalize="off" aria-describedby="format-help import-count" placeholder="user@example.com----密码----2FA密钥&#10;user2@example.com----密码----2FA密钥"></textarea>
+            <div class="import-meta"><span id="import-count">已输入 0 条</span><span id="file-name"></span></div>
+            <p class="field-help" id="format-help">格式：<code>邮箱----密码----2FA密钥</code><br>每行一条，使用四个短横线分隔。支持 Base32 密钥或 otpauth 地址。</p>
+            <div class="concurrency-field"><label for="concurrency">同时处理账号数</label><select id="concurrency" name="concurrency" aria-describedby="concurrency-help"><option value="1">1 个（逐条处理）</option><option value="2" selected>2 个（默认）</option><option value="3">3 个</option></select><p class="field-help" id="concurrency-help">完成一个账号后自动补充下一个；等待验证码的账号会占用处理名额。</p></div>
+            <details class="advanced"><summary>连接设置<span>可选</span></summary><div class="field"><label for="proxy">统一代理地址</label><input id="proxy" name="proxy" type="text" autocomplete="off" spellcheck="false" placeholder="http://127.0.0.1:7890"><p class="field-help">应用于本批次所有账号；留空使用直连。</p></div></details>
+          </fieldset>
+          <div id="form-error" class="notice notice-error" role="alert" hidden><p id="form-error-message"></p><ul id="validation-errors" hidden></ul></div>
+          <div class="form-actions"><button id="start-button" class="button button-primary" type="submit" disabled><span id="start-label">开始批量提取</span><span aria-hidden="true">→</span></button><button id="cancel-button" class="button button-secondary" type="button" hidden>取消整批</button></div>
+          <p class="privacy-note">提交成功后自动清空输入，密码和密钥不写入浏览器存储。</p>
+        </form>
+      </section>
+      <section class="output-pane" aria-labelledby="output-heading">
+        <div class="section-heading"><h2 id="output-heading">批次进度</h2><span id="batch-badge" class="job-badge">待开始</span></div>
+        <div class="batch-counts" aria-label="批次统计"><div><span>总数</span><strong id="count-total">0</strong></div><div><span>成功</span><strong id="count-success">0</strong></div><div><span>失败</span><strong id="count-error">0</strong></div><div><span>待处理</span><strong id="count-pending">0</strong></div></div>
+        <div class="progress-label"><span id="batch-summary" role="status" aria-live="polite">等待导入账号</span><span id="count-progress">0 / 0</span></div><progress id="batch-progress" max="1" value="0" aria-label="批次完成进度"></progress>
+        <div id="active-panel" class="active-panel" hidden><div class="active-heading"><h3>正在处理的账号</h3><span id="active-summary"></span></div><div id="active-jobs"></div></div>
+        <div id="downloads" class="downloads" hidden><div class="download-actions"><button id="sub2api-button" class="button button-primary" type="button">下载 Sub2API JSON <span aria-hidden="true">↓</span></button><button id="zip-button" class="button button-secondary" type="button">下载原始结果 ZIP</button><button id="rt-button" class="button button-secondary" type="button">仅下载 RT 文本</button></div><details class="save-details"><summary>查看保存位置</summary><code id="result-path"></code></details><p class="field-help">Sub2API JSON 将成功账号合并到同一个文件，包含 AT、RT 和 ID Token。下载文件包含登录凭据，请妥善保管。</p></div>
+        <div id="empty-state" class="empty-state"><div class="file-symbol" aria-hidden="true"><span>{ }</span><i></i><i></i></div><h3>按账号查看提取结果</h3><p>成功账号可合并下载为 Sub2API JSON。<br>默认同时处理 2 个账号，每个账号独立显示状态。</p></div>
+        <div id="results-panel" class="results-panel" hidden><div class="results-heading"><h3>账号结果</h3><span>每个成功账号保存 AT / RT / ID</span></div><div class="table-scroll" tabindex="0" role="region" aria-label="账号结果表格，可横向滚动"><table><thead><tr><th scope="col">行号</th><th scope="col">账号</th><th scope="col">状态</th><th scope="col">结果</th></tr></thead><tbody id="results-body"></tbody></table></div></div>
+      </section>
+    </div>
+    <footer class="workspace-footer"><span>批量导入 · 并发处理 · 完整保存</span><span>遇到额外验证时，请在对应账号下输入验证码</span></footer>
+  </main>
+  <dialog id="rt-dialog" class="rt-dialog" aria-labelledby="rt-view-title" aria-describedby="rt-view-email rt-view-help">
+    <h2 id="rt-view-title">查看账号 RT</h2>
+    <p id="rt-view-email" class="rt-view-email"></p>
+    <p id="rt-view-help" class="field-help">完整 Refresh Token。关闭窗口后隐藏并清空显示内容。</p>
+    <p id="rt-view-status" class="rt-view-status" role="status" aria-live="polite"></p>
+    <div id="rt-value-field" hidden><label for="rt-value">RT 内容</label><textarea id="rt-value" readonly rows="6" wrap="soft" spellcheck="false" autocomplete="off" autocapitalize="off" aria-describedby="rt-view-help"></textarea></div>
+    <div class="rt-view-actions"><button id="rt-copy-button" class="button button-primary" type="button" disabled>复制 RT</button><button id="rt-retry-button" class="button button-secondary" type="button" hidden>重试</button><button id="rt-close-button" class="button button-secondary" type="button" autofocus>关闭并隐藏</button></div>
+  </dialog>
+</body>
+</html>

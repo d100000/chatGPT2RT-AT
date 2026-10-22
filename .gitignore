@@ -1,0 +1,35 @@
+# Local Python environments and build artifacts
+.venv/
+venv/
+__pycache__/
+*.py[cod]
+build/
+dist/
+*.egg-info/
+.pytest_cache/
+.coverage
+htmlcov/
+
+# Private credentials and exported tokens
+.env
+.env.*
+!.env.example
+account*.json
+account*.txt
+account*.csv
+account*.tsv
+tokens*.json
+sub2api*.json
+rt-*.txt
+output/
+rt-output/
+.rt-extractor-*.tmp
+*.pem
+*.key
+id_rsa
+id_ed25519
+
+# Local runtime files
+*.log
+*.pid
+.DS_Store
