@@ -1,132 +1,114 @@
 # chatGPT2RT-AT
 
-输入已有账号的邮箱、密码和 Authenticator 2FA，完成 PKCE OAuth 登录，保存服务端返回的 **AT (`access_token`)、RT (`refresh_token`) 和 ID Token (`id_token`)**。
+一个面向已有 ChatGPT 账号的 Token 提取工具。输入**邮箱、密码和 Authenticator 2FA 密钥**，完成登录后保存 **AT、RT 和 ID Token**，支持本地网页批量处理、命令行和 Python 调用。
 
-将三类 Token 一起保存为本地 JSON，提供批量网页、命令行和 Python 接口。项目不依赖原管理后台、数据库、注册、支付或接码平台；命令行和 Python 接口不需要 Flask，网页使用独立的本地服务。
+```text
+邮箱 + 密码 + 2FA → 登录验证 → 获取 AT / RT / ID Token → 查看、复制或导出
+```
 
-## 安装和运行
+## 功能概览
 
-要求 Python 3.10+，推荐 Python 3.12。以下命令在 macOS/Linux 终端中执行，`python3` 需对应符合要求的 Python 版本。
+| 功能 | 说明 |
+| --- | --- |
+| 完整 Token 提取 | 同时保存 Access Token（AT）、Refresh Token（RT）和 ID Token；缺少任意一种时不标记为成功 |
+| 批量导入 | 网页支持粘贴账号列表或导入 UTF-8 `.txt` 文件，每批最多 1000 个账号、2 MiB 文本 |
+| 并发处理 | 默认同时处理 2 个账号，可选 1～3 个；空出名额后自动处理下一个账号 |
+| 验证码交互 | 使用 2FA 密钥生成动态码；遇到额外邮箱验证时，在对应账号下手动输入验证码 |
+| 查看与复制 RT | 成功账号旁提供「查看 RT」按钮，可显示完整内容、复制或关闭隐藏 |
+| 多种导出格式 | 支持 Sub2API JSON、原始 Token JSON、成功结果 ZIP，以及每行一个 RT 的文本 |
+| 进度与取消 | 分别显示账号状态和运行记录；单个账号失败继续处理，取消整批后保留成功结果 |
+| 限流等待 | 收到 HTTP 429 后暂停启动后续账号，显示等待时间；已运行账号继续处理 |
+| 代理与独立调用 | 支持统一代理；提供单账号 CLI 和异步 Python API，可脱离原管理后台运行 |
 
-克隆仓库并进入项目目录：
+## 快速开始
+
+需要 **Python 3.10+**，推荐 Python 3.12。以下命令以 macOS/Linux 为例，在终端中执行：
 
 ```bash
 git clone https://github.com/d100000/chatGPT2RT-AT.git
 cd chatGPT2RT-AT
-```
 
-### 本地网页
-
-安装网页依赖后启动（只监听本机）：
-
-```bash
 python3 -m venv .venv
 .venv/bin/python -m pip install '.[web]'
 .venv/bin/python -m rt_extractor.web --port 8765 --output-dir output
 ```
 
-打开 `http://127.0.0.1:8765`，批量粘贴账号，或导入 UTF-8 `.txt` 文件。每行一条，格式为：
+启动后打开 [http://127.0.0.1:8765](http://127.0.0.1:8765)。
+
+Windows 创建虚拟环境时可使用 `python -m venv .venv`，后续将 `.venv/bin/python` 替换为 `.venv\Scripts\python.exe`。
+
+### 网页使用流程
+
+1. 粘贴账号列表，或点击「导入 .txt 文件」。
+2. 选择「同时处理账号数」；默认 2，选择 1 为逐条处理。
+3. 根据需要在「连接设置」中填写统一代理地址，然后开始提取。
+4. 查看各账号的处理状态；如需邮箱验证码，在对应邮箱下输入。
+5. 账号成功后可立即查看 RT、复制 RT 或下载该账号的原始 JSON。
+6. 批次结束后，点击「下载 Sub2API JSON」合并导出成功账号，也可下载 ZIP 或 RT 文本。
+
+## 账号输入格式
+
+每行一个账号，使用四个英文短横线 `----` 分隔：
 
 ```text
-账号邮箱----账号密码----2FA密钥
+邮箱----密码----2FA密钥
 ```
 
-分隔符为四个英文短横线。字段本身不能包含此分隔符；密码中的空格会原样保留，邮箱和密钥两端的空白会移除。支持 Base32 密钥及符合下文约束的 `otpauth://totp/` URI。
+以下为占位示例，使用时需替换为实际账号信息：
 
-每批最多 1000 条，忽略空行，支持文件开头的 UTF-8 BOM。开始前校验所有行；格式错误、无效密钥或重复邮箱（不区分大小写）会按原始行号提示，整批不启动，不会默默跳过账号。超过上限会明确拒绝。
-
-网页默认同时处理 **2 个账号**，可在「同时处理账号数」选择 **1、2 或 3**；选择 1 为逐条处理。后台使用固定数量的工作线程，按输入顺序从队列领取账号，完成一个后补充下一个，单个账号失败不影响其他账号。同一时刻运行一个批次，使用统一的可选代理。页面中的账号列表及导出结果始终按输入顺序排列，完成先后不会改变账号与 Token 的对应关系。
-
-「正在处理的账号」分别显示各账号进度、运行记录和验证码输入框；同时出现多个验证请求时，请在对应邮箱下提交验证码。等待人工验证码的账号继续占用处理名额，其他名额正常运行；全部名额都等待验证时，需要先输入验证码。每个账号的默认 180 秒总超时包含人工验证码等待。取消整批后会停止领取新账号并取消所有运行任务，页面显示「正在取消」，等待任务收尾后结束批次并保留已有成功结果。同步认证计算或 Node 子进程收尾可能使取消稍晚完成。
-
-认证服务或 Sentinel 返回 HTTP 429 时，该账号记为失败，其余队列按照 `Retry-After` 暂停启动新账号，已运行的账号继续处理。未提供有效等待时间时默认等待 30 秒，等待范围为 1～900 秒，页面显示倒计时；取消整批可立即中断队列等待。限流不会自动重复提交该账号的密码或验证码，可在批次结束后自行重试失败账号。
-
-本次并发数是本地调度上限，不代表已验证的服务端并发配额，也未承诺真实账号的加速倍数。
-
-成功后每个账号的完整 AT、RT、ID Token 自动保存到 `output/batch-<批次ID>/`（或你指定的输出目录）。批次结束后点击「下载 Sub2API JSON」，将成功账号合并为一个与提供样例结构一致的 `sub2api-data` 文件。也可下载原始结果 ZIP（含每个成功账号的原始 JSON 和记录行号、邮箱、状态的 `manifest.json`），或每行一个 RT 的文本；单行仍可下载原始 JSON。取消批次后，已成功的结果仍可下载。
-
-每个成功账号旁提供「查看 RT」按钮，点击后可查看完整 RT、复制或关闭隐藏。RT 按需读取，关闭窗口或开始新批次会清空显示内容，不写入浏览器本地存储。
-
-任务查询只返回状态，不返回 Token 正文；只有主动查看或下载时才返回凭据。密码和 2FA 密钥不会写入磁盘或浏览器本地存储；提交成功后清空输入区。刷新页面可恢复当前批次状态；重启服务可恢复已保存的已结束批次，正在执行的登录不会自动续跑。最近三个批次提供下载接口，更早的结果仍在输出目录。
-
-### 命令行
-
-仅使用命令行时，在仓库根目录安装基础依赖即可：
-
-```bash
-python3 -m venv .venv
-.venv/bin/python -m pip install .
-.venv/bin/rt-extractor --email you@example.com --output tokens.json
+```text
+user1@example.com----YOUR_PASSWORD----YOUR_BASE32_SECRET
+user2@example.com----YOUR_PASSWORD----YOUR_BASE32_SECRET
 ```
 
-程序隐藏输入密码与 2FA 密钥。2FA 支持：
+- 网页批量输入的三个字段均不能为空，2FA 支持 Base32 密钥或 `otpauth://totp/` URI。
+- `otpauth` URI 只接受 SHA1、6 位动态码、30 秒周期；机器时间应保持准确。
+- 支持 UTF-8 文本、文件开头的 BOM，忽略空行。字段中不能包含分隔符 `----`。
+- 邮箱和密钥两端的空白会移除，密码中的空格原样保留。
+- 开始前会校验全部行。格式错误、无效密钥或重复邮箱会按行号提示，整批不会启动；邮箱重复判断不区分大小写。
 
-- Base32 密钥，如认证器绑定时保存的密钥；在本地按当前时间生成动态码。
-- `otpauth://totp/...` URI；只接受 SHA1、6 位、30 秒配置。
-- 密钥留空，在服务端请求 2FA 时输入认证器当前的 6 位动态码。
+## 并发、验证码和限流
 
-机器时间需准确。已有 6 位动态码可能在网络登录过程中到期，优先使用密钥或在提示出现时输入新码。
+| 设置 | 当前行为 |
+| --- | --- |
+| 同时处理账号数 | 可选 1、2、3，默认 2；同一时刻运行一个批次 |
+| 任务补位 | 账号结束后立即从队列领取下一个；单个账号失败不影响其他账号 |
+| 人工验证码 | 每个账号有独立表单；等待验证仍占用名额，其他名额继续运行 |
+| 单账号超时 | 网页默认 180 秒，包含人工验证码等待；CLI 可通过 `--timeout` 调整 |
+| 统一代理 | 适用于本批次全部账号；支持 HTTP、HTTPS、SOCKS5、SOCKS5H，留空直连 |
+| 取消整批 | 停止领取新账号、取消运行任务，等待收尾后结束，保留已成功的结果 |
 
-输出文件默认不覆盖。确认需要替换时加 `--overwrite`。使用代理可传 `--proxy http://127.0.0.1:7890`，也支持 `socks5://`。`--timeout 180` 设置登录流程的超时秒数。
+如果全部处理名额都在等待验证码，需要先完成验证才会继续派发。验证码可能过期，应在对应账号下及时提交。
 
-超时采用协作取消：验证码输入可取消并恢复终端回显；已有认证 VM 计算或其 Node 子进程收尾可能让命令稍晚退出，Node 单次调用上限为 30 秒。
+收到认证服务或 Sentinel 的 HTTP 429 时，限流账号记为失败，其余队列按照 `Retry-After` 等待后继续。无有效等待时间时默认等待 30 秒，等待范围为 1～900 秒。程序不会因此自动重新提交该账号的密码或验证码，可在批次结束后重新导入失败账号。
 
-安装后也可以使用 `.venv/bin/python -m rt_extractor`。后文的 `rt-extractor` 命令需在已激活虚拟环境的终端中执行，或替换为 `.venv/bin/rt-extractor`。
+取消采用协作方式。同步认证计算或 Node 子进程需要收尾时，页面会暂时显示「正在取消」；Node 单次调用上限为 30 秒。
 
-## 无交互调用
+## 查看结果与下载
 
-创建本地 `account.json`（以下为占位示例）：
+| 操作 | 可用时机 | 内容 |
+| --- | --- | --- |
+| 查看 RT / 复制 RT | 单个账号成功后 | 该账号完整的 Refresh Token，关闭后隐藏并清空显示内容 |
+| 原始 JSON | 单个账号成功后 | AT、RT、ID Token、有效期和账号元数据 |
+| Sub2API JSON | 批次完成或取消后，且至少有一个成功账号 | 将成功账号合并为一个 `sub2api-data` 文件 |
+| 原始结果 ZIP | 同上 | 每个成功账号的 JSON，以及包含所有账号行号、邮箱、状态的 `manifest.json` |
+| RT 文本 | 同上 | 仅成功账号的 RT，每行一个 |
 
-```json
-{
-  "email": "you@example.com",
-  "password": "YOUR_ACCOUNT_PASSWORD",
-  "totp_secret": "YOUR_BASE32_SECRET",
-  "proxy": "http://127.0.0.1:7890"
-}
+列表及批量导出始终按输入顺序排列，不受账号完成先后影响。失败和未完成账号不会混入成功 Token 导出。
+
+使用快速开始中的启动命令时，每个成功账号的原始 JSON 会自动保存到：
+
+```text
+output/
+└── batch-<批次ID>/
+    ├── tokens-<任务ID>.json
+    └── batch-state.json
 ```
 
-不需要代理时删除 `proxy` 字段。执行：
+`batch-state.json` 在批次结束后保存状态，不包含 Token 正文。输出目录可通过 `--output-dir` 修改；不指定时默认为 `rt-output/`。
 
-```bash
-rt-extractor --input account.json --output tokens.json --non-interactive
-```
-
-也支持环境变量 `RT_EMAIL`、`RT_PASSWORD`、`RT_TOTP_SECRET`、`RT_TOTP_CODE`、`RT_PROXY`。使用 `--input` 时不会混用环境变量中的其他账号凭证。`totp_secret` 与 `totp_code` 二选一。密码和 2FA 不提供命令行参数，避免出现在进程参数列表中。
-
-如果服务端另外要求邮箱验证码，交互模式会提示输入；无交互模式返回额外验证错误。手机号验证、绑手机或不支持的验证方式会停止并明确报错。2FA 不能替代服务端要求的其他验证。
-
-## Python 接口
-
-```python
-import asyncio
-import os
-from rt_extractor import extract_and_save
-
-async def main():
-    result = await extract_and_save(
-        os.environ["RT_EMAIL"],
-        os.environ["RT_PASSWORD"],
-        "tokens.json",
-        totp_secret=os.environ["RT_TOTP_SECRET"],
-        # proxy="http://127.0.0.1:7890",
-        timeout=180,
-    )
-    # result.access_token / result.refresh_token / result.id_token
-    print("已保存完整 Token")
-
-asyncio.run(main())
-```
-
-`extract_tokens(...)` 只返回 `TokenBundle`；`save_tokens(result, path)` 单独保存结果。可传异步 `totp_fetcher() -> str` 在挑战时取当前动态码、`otp_fetcher(email) -> str` 获取额外邮箱验证码，以及同步 `on_step(stage, message)` 接收脱敏进度。
-
-模块为异步接口，调用方已有事件循环时直接 `await`。输入错误为 `ValueError`，网络失败/超时/结果不完整为 `ExtractionError`，协议拒绝为 `rt_extractor._protocol.login.ProtocolError`。额外验证为其子类 `AdditionalVerificationRequired`，可通过 `.kind` 区分。
-
-## 保存格式
-
-### 原始 Token JSON
-
-每个账号的磁盘文件、单行下载及 ZIP 内的账号文件使用以下格式：
+<details>
+<summary>原始 Token JSON 示例</summary>
 
 ```json
 {
@@ -145,11 +127,12 @@ asyncio.run(main())
 }
 ```
 
-三类 Token 缺少任何一个都会失败，不把部分结果标为成功。到期时间指 AT 的有效期，不代表 RT 的寿命。账号标识等元数据取自 Token claims，仅作为信息展示，不用于身份验证。文件不保存密码、2FA 密钥、代理凭证。文件以原子方式写入，POSIX 权限为 `0600`，内容为明文凭证；输出不显示在普通日志中。
+`expires_at` 表示 AT 的到期时间，不代表 RT 的寿命。账号标识等元数据来自 Token claims，仅作为信息展示，不用于身份验证。
 
-### Sub2API 批量 JSON
+</details>
 
-网页的「下载 Sub2API JSON」使用样例的字段层级和默认配置。`accounts` 按输入顺序收集本批次成功的账号，失败和取消的账号不写入；`exported_at` 是下载生成时的 UTC 时间，保留毫秒并以 `Z` 结尾。`proxies` 固定为空数组，登录使用的代理及其凭据不会导出。
+<details>
+<summary>Sub2API 批量 JSON 示例</summary>
 
 ```json
 {
@@ -189,22 +172,101 @@ asyncio.run(main())
 }
 ```
 
-邮箱、三类 Token、账号 ID 和用户 ID 均取自本次成功提取的账号，不复用样例中的账号数据。导出账号中的 `concurrency: 10` 是样例的 Sub2API 配置字段，与网页选择的本批次同时处理账号数无关。`privacy_mode` 等配置值沿用样例以兼容其格式；本工具没有修改账号训练或隐私设置，这些字段不代表服务端设置的检查结果。
+`accounts` 只包含成功账号；`exported_at` 为生成文件时的 UTC 时间，`proxies` 固定为空数组，不导出登录代理及其凭据。
 
-## 实现与验证范围
+导出字段中的 `concurrency: 10` 是 Sub2API 账号配置，与网页选择的同时处理账号数无关。`privacy_mode` 等字段沿用导出格式的配置值，不表示本工具修改或核验了账号的服务端隐私设置。
 
-登录协议代码整理自原项目的 `botcore/protocol_register`，保留登录所需的 PKCE、HTTP、TOTP 和认证支持代码；本仓库不依赖原项目的数据库、注册入口或自动接码模块。新客户端开启 TLS 验证，OAuth 回调核对完整地址及 state，并在请求前截获回调，不依赖本机端口 1455 正在监听。
+</details>
 
-这是对现有项目协议的整理，涉及私有登录接口，可能随服务端更新而失效。官方文档描述的是浏览器或设备码登录，没有为本项目的密码/TOTP HTTP 协议提供稳定性承诺：[OpenAI 认证文档](https://learn.chatgpt.com/docs/auth)。本次仅以模拟网络和合成凭证验证代码；没有执行真实账号登录，因此不承诺当前账号能成功获取 RT。
+## 命令行与 Python 接口
 
-离线测试，在仓库根目录执行（先安装网页依赖）：
+CLI 和公开 Python API 用于**单个账号**；批量导入及并发控制通过网页使用。仅需 CLI/API 时，安装命令可使用 `.venv/bin/python -m pip install .`，无需 Flask。
+
+### 交互式命令行
+
+```bash
+.venv/bin/python -m rt_extractor --email you@example.com --output tokens.json
+```
+
+程序隐藏输入密码和 2FA 密钥。密钥留空时，可在需要验证时输入 Authenticator 当前的 6 位动态码。已有动态码可能在登录过程中到期，优先使用密钥或按提示输入新码。
+
+输出文件默认不覆盖；可使用 `--overwrite` 明确覆盖。其他参数示例：
+
+```bash
+.venv/bin/python -m rt_extractor --email you@example.com --output tokens.json --proxy http://127.0.0.1:7890 --timeout 180
+```
+
+### 无交互调用
+
+自行创建本地 `account.json`，以下内容均为占位值；不需要代理时删除 `proxy` 字段：
+
+```json
+{
+  "email": "you@example.com",
+  "password": "YOUR_ACCOUNT_PASSWORD",
+  "totp_secret": "YOUR_BASE32_SECRET",
+  "proxy": "http://127.0.0.1:7890"
+}
+```
+
+```bash
+.venv/bin/python -m rt_extractor --input account.json --output tokens.json --non-interactive
+```
+
+也可使用环境变量 `RT_EMAIL`、`RT_PASSWORD`、`RT_TOTP_SECRET`、`RT_TOTP_CODE`、`RT_PROXY`；`totp_secret` 与 `totp_code` 二选一。指定 `--input` 时，不会混用环境变量中的账号凭证。密码和 2FA 不提供命令行参数，避免出现在进程参数列表中。
+
+如需额外邮箱验证码，交互模式会提示输入，无交互模式返回额外验证错误。
+
+### Python 调用
+
+```python
+import asyncio
+import os
+from rt_extractor import extract_and_save
+
+async def main():
+    result = await extract_and_save(
+        os.environ["RT_EMAIL"],
+        os.environ["RT_PASSWORD"],
+        "tokens.json",
+        totp_secret=os.environ["RT_TOTP_SECRET"],
+        timeout=180,
+    )
+    # result.access_token / result.refresh_token / result.id_token
+    print("已保存完整 Token")
+
+asyncio.run(main())
+```
+
+- `extract_tokens(...)`：异步登录并返回 `TokenBundle`，不写文件。
+- `extract_and_save(...)`：异步登录并保存三类 Token。
+- `save_tokens(result, path)`：单独保存已有结果。
+
+支持异步 `totp_fetcher() -> str`、`otp_fetcher(email) -> str` 回调，以及同步 `on_step(stage, message)` 脱敏进度回调。调用方已有事件循环时直接 `await`。
+
+输入错误为 `ValueError`；网络失败、超时或结果不完整为 `ExtractionError`；协议拒绝为 `rt_extractor._protocol.login.ProtocolError`。额外验证为其子类 `AdditionalVerificationRequired`，可通过 `.kind` 区分。
+
+## 数据保存与运行限制
+
+- **凭据保存**：程序不会把输入的密码、2FA 密钥或代理凭证写入 Token 结果；网页提交成功后清空输入，也不使用浏览器本地存储保存这些内容。自行创建的 `account.json` 本身包含凭据，需自行保管。
+- **Token 文件**：保存为明文 JSON，以原子方式写入，POSIX 权限为 `0600`。查看 RT 时按需读取，普通状态查询不返回 Token 正文。
+- **刷新与重启**：刷新页面可恢复当前批次；服务重启可恢复最近三个已保存的已结束批次，无法续跑正在执行的登录。已写出的 Token 文件仍保留在输出目录。
+- **本地运行**：当前仅允许本机访问，不包含公网管理员登录。远程开放访问前，需要增加 HTTPS、身份验证和私有持久化存储。
+- **进程模型**：任务状态保存在单个应用进程的内存中，不能直接增加多个应用副本共享当前任务。
+- **功能边界**：处理已有账号，不包含自动注册、手机号验证、自动邮箱取码或 RT 自动续期。2FA 不能替代服务端要求的其他验证。
+- **兼容性**：登录使用私有接口，可能随服务端更新失效；并发数是本地上限，不代表服务端配额或实际加速倍数。Node.js 仅用于可选的认证 VM 回退，并非基础依赖。
+
+登录协议整理自原项目的 `botcore/protocol_register`，保留 PKCE、HTTP、TOTP 和认证支持代码，独立于原管理后台、数据库、注册、支付及接码模块。客户端开启 TLS 验证，核对 OAuth 回调地址和 state，并在请求前截获回调，不依赖本机端口 1455 正在监听。认证背景可参考 [OpenAI 认证文档](https://learn.chatgpt.com/docs/auth)。
+
+## 测试与项目结构
+
+安装网页依赖后，在仓库根目录执行：
 
 ```bash
 .venv/bin/python -m unittest discover -s tests -v
 ```
 
-
-## 目录结构
+测试使用合成账号和模拟网络，覆盖登录协议、保存、网页交互接口、并发调度、验证码、取消、限流和导出，不会登录真实账号。
 
 ```text
 chatGPT2RT-AT/
@@ -212,7 +274,5 @@ chatGPT2RT-AT/
 ├── pyproject.toml
 ├── requirements.txt
 ├── rt_extractor/          # 独立模块、网页和登录协议
-└── tests/                 # 模拟网络和合成账号测试
+└── tests/                 # 合成账号和模拟网络测试
 ```
-
-当前网页仅监听本机，不包含公网管理员登录。将其部署到远程服务器并开放浏览器访问前，需要配置 HTTPS、身份验证和私有持久化存储；当前内存任务调度按单应用进程运行，服务重启不会续跑进行中的登录。
