@@ -110,6 +110,7 @@ import { getBrowserResults, collectBatchResults, isBatchCollected, resetResultCo
     const stopping = cancelling || batch?.status === 'cancelling';
     const busy = active || submitting || importing || initializing || clearing;
     byId('credentials-fields').disabled = busy;
+    byId('clear-accounts-button').disabled = busy || (!byId('accounts-text').value && !byId('file-name').textContent);
     const submitRemaining = cooldowns.remaining('submit');
     const cancelRemaining = cooldowns.remaining('cancel');
     byId('start-button').disabled = busy || submitRemaining > 0;
@@ -515,7 +516,17 @@ import { getBrowserResults, collectBatchResults, isBatchCollected, resetResultCo
     finally { button.disabled = false; }
   }
 
-  byId('accounts-text').addEventListener('input', () => { updateCount(); byId('file-name').textContent = ''; });
+  byId('accounts-text').addEventListener('input', () => { updateCount(); byId('file-name').textContent = ''; updateControls(); });
+  byId('clear-accounts-button').addEventListener('click', () => {
+    if (byId('clear-accounts-button').disabled || byId('credentials-fields').disabled) return;
+    byId('accounts-text').value = '';
+    byId('accounts-file').value = '';
+    byId('file-name').textContent = '';
+    showError('');
+    updateCount();
+    updateControls();
+    byId('accounts-text').focus();
+  });
   byId('rt-close-button').addEventListener('click', hideRt);
   byId('rt-dialog').addEventListener('cancel', (event) => { event.preventDefault(); hideRt(); });
   byId('rt-dialog').addEventListener('close', () => { if (!byId('rt-dialog').open) clearRt(); });

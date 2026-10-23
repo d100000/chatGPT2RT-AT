@@ -99,8 +99,9 @@ textarea { min-height: 215px; max-height: 540px; resize: vertical; font: 12px/1.
 input:focus, textarea:focus, select:focus { border-color: var(--blue); outline: 2px solid var(--blue-soft); outline-offset: 1px; }
 input::placeholder, textarea::placeholder { color: #6f7e93; font-size: 11px; }
 input:disabled, textarea:disabled, select:disabled { background: var(--canvas); color: var(--muted); }
-.import-toolbar { display: flex; justify-content: space-between; align-items: center; margin-bottom: 9px; gap: var(--space-sm); }
+.import-toolbar { display: flex; flex-wrap: wrap; justify-content: space-between; align-items: center; margin-bottom: 9px; gap: var(--space-sm); }
 .import-toolbar label { margin: 0; }
+.import-actions { display: flex; align-items: center; justify-content: flex-end; flex-wrap: wrap; gap: var(--space-sm); }
 .text-button { border: 0; color: var(--blue); background: transparent; padding: 7px 0; min-height: 36px; font-size: 11px; }
 .text-button:hover:not(:disabled) { text-decoration: underline; }
 .import-meta { display: flex; justify-content: space-between; gap: var(--space-sm); margin-top: 8px; color: var(--muted); font-size: 11px; }

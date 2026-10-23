@@ -15,7 +15,7 @@
         <form id="batch-form">
           <fieldset id="credentials-fields">
             <legend class="sr-only">批量账号信息</legend>
-            <div class="import-toolbar"><label for="accounts-text">账号列表</label><button class="text-button" id="import-button" type="button">导入 .txt 文件</button><input id="accounts-file" class="sr-only" type="file" accept=".txt,text/plain" tabindex="-1" aria-label="选择账号文本文件"></div>
+            <div class="import-toolbar"><label for="accounts-text">账号列表</label><div class="import-actions"><button class="text-button" id="clear-accounts-button" type="button" disabled>清空输入</button><button class="text-button" id="import-button" type="button">导入 .txt 文件</button></div><input id="accounts-file" class="sr-only" type="file" accept=".txt,text/plain" tabindex="-1" aria-label="选择账号文本文件"></div>
             <textarea id="accounts-text" name="accounts_text" rows="10" required spellcheck="false" autocomplete="off" autocapitalize="off" aria-describedby="format-help import-count" placeholder="user@example.com----密码----2FA密钥&#10;user2@example.com----密码----2FA密钥"></textarea>
             <div class="import-meta"><span id="import-count">已输入 0 条</span><span id="file-name"></span></div>
             <p class="field-help" id="format-help">格式：<code>邮箱----密码----2FA密钥</code><br>每行一条，使用四个短横线分隔。支持 Base32 密钥或 otpauth 地址。</p>
