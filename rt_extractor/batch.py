@@ -97,7 +97,7 @@ def parse_accounts(payload: Any) -> list[tuple[int, dict]]:
 @dataclass
 class Batch:
     id: str
-    directory: Path
+    directory: Path | None
     rows: list[Job]
     concurrency: int = DEFAULT_CONCURRENCY
     status: str = "queued"
@@ -109,6 +109,8 @@ class Batch:
     inflight: set[str] = field(default_factory=set, repr=False)
     dispatch_not_before: float = field(default=0, repr=False)
     wake: threading.Event = field(default_factory=threading.Event, repr=False)
+    finished_at: float | None = field(default=None, repr=False)
+    credential_records: list[dict] = field(default_factory=list, repr=False)
 
     def snapshot(self) -> dict:
         counts = {"total": len(self.rows), "queued": 0, "running": 0, "awaiting_code": 0,
@@ -123,6 +125,11 @@ class Batch:
         result = None
         if status in {"completed", "cancelled"} and counts["success"]:
             result = {
+                "conversion_status": self.conversion_status,
+                "conversion_error": self.conversion_error,
+                "cpa_filename": f"cpa-{self.id}.zip",
+                "sub2api_filename": f"sub2api-{self.id}.json",
+            } if self.directory is None else {
                 "directory": str(self.directory),
                 "sub2api_url": f"/api/batches/{self.id}/sub2api-download",
                 "cpa_url": f"/api/batches/{self.id}/cpa-download",
@@ -153,7 +160,8 @@ class BatchManager:
         self.lock = jobs.lock
         self.batches: dict[str, Batch] = {}
         self.current_id: str | None = None
-        self._restore_completed()
+        if not jobs.ephemeral:
+            self._restore_completed()
 
     def _restore_completed(self) -> None:
         """Recover only terminal metadata; never load credentials or resume logins."""
@@ -286,11 +294,13 @@ class BatchManager:
             if self.jobs.active_batch or any(job.status in ACTIVE for job in self.jobs.jobs.values()):
                 raise ValueError("已有任务进行中，请先完成或取消当前任务")
             batch_id = uuid.uuid4().hex
-            directory = self.jobs.output_dir / f"batch-{batch_id}"
-            directory.mkdir(mode=0o700)
+            directory = None if self.jobs.ephemeral else self.jobs.output_dir / f"batch-{batch_id}"
+            if directory is not None:
+                directory.mkdir(mode=0o700)
             rows = [Job(id=uuid.uuid4().hex, email=data["email"], line=line,
                         batch_id=batch_id, output_dir=directory) for line, data in accounts]
-            batch = Batch(id=batch_id, directory=directory, rows=rows, concurrency=concurrency)
+            batch = Batch(id=batch_id, directory=directory, rows=rows, concurrency=concurrency,
+                          credential_records=[data for _, data in accounts])
             while len(self.batches) >= 3:
                 old = self.batches.pop(next(iter(self.batches)))
                 for row in old.rows:
@@ -302,7 +312,7 @@ class BatchManager:
             worker = threading.Thread(target=self._run, args=(batch, accounts), daemon=True)
             try:
                 worker.start()
-            except Exception:
+            except BaseException:
                 self.jobs.active_batch = None
                 self.batches.pop(batch_id, None)
                 self.current_id = next(reversed(self.batches), None)
@@ -392,6 +402,7 @@ class BatchManager:
             for _, credentials in accounts:
                 credentials.clear()
             accounts.clear()
+            batch.credential_records.clear()
             pending.clear()
             with self.lock:
                 if batch.cancel_requested:
@@ -399,12 +410,16 @@ class BatchManager:
                 batch.status = "cancelled" if batch.cancel_requested else "completed"
                 batch.current = None
                 self.jobs.active_batch = None
-                if any(row.status == "success" for row in batch.rows):
-                    self._save_generated(batch)
-                try:
-                    self._save_completed(batch)
-                except OSError:
-                    batch.error = "批次状态保存失败；重启后请从保存目录查看已有结果"
+                batch.finished_at = self.jobs.clock()
+                if self.jobs.ephemeral:
+                    batch.conversion_status = "ready" if any(row.status == "success" for row in batch.rows) else "not_saved"
+                else:
+                    if any(row.status == "success" for row in batch.rows):
+                        self._save_generated(batch)
+                    try:
+                        self._save_completed(batch)
+                    except OSError:
+                        batch.error = "批次状态保存失败；重启后请从保存目录查看已有结果"
 
     def _save_generated(self, batch: Batch) -> None:
         """Generate both batch formats before publishing terminal metadata."""
@@ -434,6 +449,8 @@ class BatchManager:
 
     def _export_payloads(self, batch_id: str) -> tuple[dict, list, list]:
         """Read every successful result, failing atomically for missing records."""
+        if self.jobs.ephemeral:
+            raise ValueError("网页结果仅在浏览器中导出")
         with self.lock:
             batch = self.batches[batch_id]
             snapshot = batch.snapshot()

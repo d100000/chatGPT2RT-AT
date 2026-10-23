@@ -1,9 +1,11 @@
 """Contracts for the three-tool workspace and browser-only IPOK integration."""
+
 from pathlib import Path
 import tempfile
 import unittest
 
 from rt_extractor.web import create_app
+from tests.web_client import browser_headers
 
 
 class WorkspaceTests(unittest.TestCase):
@@ -16,13 +18,18 @@ class WorkspaceTests(unittest.TestCase):
         self.directory.cleanup()
 
     def test_each_tool_has_navigation_and_can_authenticate_local_result_requests(self):
-        for route, page in (("/", "extractor"), ("/converter", "converter"), ("/network", "network")):
+        for route, page in (
+            ("/", "extractor"),
+            ("/converter", "converter"),
+            ("/network", "network"),
+        ):
             with self.subTest(route=route):
                 response = self.client.get(route)
                 self.assertEqual(response.status_code, 200)
                 html = response.get_data(as_text=True)
                 self.assertIn(f'data-page="{page}"', html)
-                self.assertIn(self.app.config["RT_CSRF_TOKEN"], html)
+                self.assertIn(browser_headers(self.app, self.client)["X-RT-CSRF"], html)
+                self.assertNotIn(self.app.config["RT_CSRF_TOKEN"], html)
                 for href in ("/", "/converter", "/network"):
                     self.assertIn(f'href="{href}"', html)
                 self.assertIn('id="network-summary-status"', html)
@@ -37,7 +44,7 @@ class WorkspaceTests(unittest.TestCase):
         self.assertIn("frame-ancestors 'none'", csp)
         self.assertNotIn("unsafe-inline", csp)
         self.assertNotIn("<iframe", response.get_data(as_text=True))
-        self.assertEqual(response.headers["Cache-Control"], "no-store")
+        self.assertTrue(response.cache_control.no_store)
 
     def test_all_tools_retain_local_access_guards(self):
         for route in ("/", "/converter", "/network"):

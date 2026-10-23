@@ -1,5 +1,6 @@
-// Only this acknowledgement timestamp is retained; no account or Token data.
-export const NOTICE_STORAGE_KEY = 'bob-ai-site-notice-acknowledged-at-v1';
+// This key stores only the acknowledgement timestamp. Result credentials use a
+// separate owner-scoped cache. Re-show the notice when data handling changes.
+export const NOTICE_STORAGE_KEY = 'bob-ai-site-notice-acknowledged-at-v2';
 export const NOTICE_INTERVAL_MS = 7 * 24 * 60 * 60 * 1000;
 export const NOTICE_QQ_GROUP = '916444032';
 

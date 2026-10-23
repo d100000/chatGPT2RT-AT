@@ -1,7 +1,7 @@
 import { convertCPARecord, convertSub2ApiDocument, buildMergedSub2ApiDocument, formatMergedPreview } from './converter.mjs';
 import { buildZipArchive, makeUniqueFileNames } from './archive.mjs';
 import { parsePastedJsonDocuments } from './paste-input.mjs';
-import { createRequestCooldowns, rateLimitError } from './request-limits.mjs';
+import { getBrowserResults } from './browser-results.mjs';
 
 const byId = (id) => document.getElementById(id);
 const limits = { items: 1000, perDocument: 2 * 1024 * 1024, total: 20 * 1024 * 1024, preview: 24000 };
@@ -16,15 +16,8 @@ let sourceCount = 0;
 let totalBytes = 0;
 let busy = false;
 let dragging = 0;
+let loadedExtraction = false;
 const seenInputs = new Set();
-const latestCooldown = createRequestCooldowns({ now: () => Date.now() });
-let latestCooldownTimer;
-
-function updateLatestCooldown() {
-  clearTimeout(latestCooldownTimer);
-  updateControls();
-  if (latestCooldown.remaining('latest')) latestCooldownTimer = setTimeout(updateLatestCooldown, 1000);
-}
 
 function showError(message = '') {
   byId('converter-error').textContent = message;
@@ -48,9 +41,8 @@ function updateControls() {
   byId('converter-clear').disabled = busy || (!rows.length && !byId('converter-json').value && !sourceCount);
   byId('convert-paste-button').disabled = busy || !byId('converter-json').value.trim();
   if (byId('converter-use-latest')) {
-    const remaining = latestCooldown.remaining('latest');
-    byId('converter-use-latest').disabled = busy || remaining > 0;
-    byId('converter-use-latest').textContent = remaining ? `${remaining} 秒后可载入` : '载入最近提取结果 ↗';
+    byId('converter-use-latest').disabled = busy;
+    byId('converter-use-latest').textContent = '载入本浏览器提取结果 ↗';
   }
   for (const id of ['convert-merged', 'convert-split', 'convert-preview']) byId(id).disabled = busy;
   for (const button of byId('converter-results-body').querySelectorAll('button')) button.disabled = busy;
@@ -267,6 +259,7 @@ function closePreview() {
 }
 
 function reset() {
+  loadedExtraction = false;
   closePreview();
   rows = [];
   sourceCount = 0;
@@ -294,46 +287,13 @@ function setMode(next, internal = false) {
 }
 
 async function loadLatestExtraction() {
-  if (latestCooldown.remaining('latest')) return;
   await perform(async () => {
-    const csrf = document.querySelector('meta[name="rt-csrf"]')?.content;
-    if (!csrf) { showError('本地页面凭据缺失，请刷新后重试。'); return; }
-    const localJson = async (path) => {
-      const response = await fetch(path, {
-        credentials: 'same-origin', cache: 'no-store', headers: { 'X-RT-CSRF': csrf },
-      });
-      if (response.status === 429) {
-        const error = rateLimitError(response, await response.json().catch(() => ({})));
-        latestCooldown.hold('latest', error.retryAfter);
-        updateLatestCooldown();
-        throw error;
-      }
-      if (!response.ok) throw new Error('local-request-failed');
-      return response.json();
-    };
-    let source, label;
-    try {
-      const { batch } = await localJson('/api/batches/current');
-      if (batch) {
-        if (!['completed', 'cancelled'].includes(batch.status)) {
-          showError('最近批次仍在进行，请等待结束后载入。提取页可随时查看进度和已成功账号。'); return;
-        }
-        if (!batch.counts?.success || !batch.result) {
-          showError('最近批次没有成功结果，请先在 Token 获取中完成提取。'); return;
-        }
-        source = await localJson(`/api/batches/${encodeURIComponent(batch.id)}/conversion-source`);
-        label = `最近提取批次 · ${batch.counts.success} 个成功账号`;
-      } else {
-        const { job } = await localJson('/api/jobs/current');
-        if (!job || job.status !== 'success') {
-          showError('没有可载入的提取结果，请先在 Token 获取中完成提取。'); return;
-        }
-        source = { accounts: [await localJson(`/api/jobs/${encodeURIComponent(job.id)}/cpa-download`)] };
-        label = `最近提取账号 · ${job.email}`;
-      }
-    } catch (error) {
-      showError(error.status === 429 ? error.message : '无法读取最近提取结果，请确认本地服务正在运行，刷新页面后重试。'); return;
+    const cached = getBrowserResults().read();
+    if (!cached?.records.length) {
+      showError('本浏览器没有可载入的提取结果，或浏览器缓存已过期。请先提取，或导入已下载的认证文件。'); return;
     }
+    const source = { accounts: cached.records.map((record) => record.cpa) };
+    const label = `本浏览器提取结果 · ${cached.records.length} 个成功账号`;
     const bytes = encoder.encode(JSON.stringify(source)).length;
     if (!Array.isArray(source?.accounts) || !source.accounts.length || source.accounts.length > limits.items || bytes > limits.total) {
       showError('最近结果为空或超过转换容量，请分批导入已下载的认证文件。'); return;
@@ -349,12 +309,13 @@ async function loadLatestExtraction() {
     reset();
     reserveSources(1, bytes);
     await addDocument(input, label);
+    loadedExtraction = true;
     const origin = byId('converter-origin');
     if (origin) {
       origin.textContent = `${label}，当前转换方向：${direction === 'cpaToSub2Api' ? 'CPA → Sub2API' : 'Sub2API → CPA'}。可切换方向后重新载入。`;
       origin.hidden = false;
     }
-  }, '正在载入最近提取结果…');
+  }, '正在读取本浏览器提取结果…');
 }
 
 byId('mode-cpa').addEventListener('click', () => setMode('cpaToSub2Api'));
@@ -367,6 +328,11 @@ byId('converter-json').addEventListener('input', updateControls);
 byId('convert-paste-button').addEventListener('click', importPasted);
 byId('converter-clear').addEventListener('click', reset);
 byId('converter-use-latest')?.addEventListener('click', loadLatestExtraction);
+document.addEventListener('rt:results-cleared', reset);
+document.addEventListener('rt:browser-results', () => {
+  closePreview();
+  if (loadedExtraction && !getBrowserResults().read()) reset();
+});
 byId('converter-preview-close').addEventListener('click', closePreview);
 byId('converter-preview-dialog').addEventListener('cancel', (event) => { event.preventDefault(); closePreview(); });
 byId('converter-preview-dialog').addEventListener('close', () => { byId('converter-preview-value').textContent = ''; });

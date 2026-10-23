@@ -42,9 +42,10 @@ export function createRequestCooldowns({ now = Date.now } = {}) {
 }
 
 export function requestLimitAction(path, method = 'GET') {
-  if (/\/cancel$/.test(path)) return 'cancel';
+  if (/\/cancel$/.test(path) || (path === '/api/workspace' && method.toUpperCase() === 'DELETE')) return 'cancel';
   if (method.toUpperCase() === 'POST' && /^\/api\/(?:jobs|batches)$/.test(path)) return 'submit';
+  if (/\/ack$/.test(path)) return 'handoff-ack';
   if (/\/code$/.test(path)) return 'code';
-  if (/\/(?:rt|download|rt-download|cpa-download|sub2api-download|conversion-source)$/.test(path)) return 'download';
+  if (/\/(?:results|result|rt|download|rt-download|cpa-download|sub2api-download|conversion-source)$/.test(path)) return 'download';
   return 'poll';
 }

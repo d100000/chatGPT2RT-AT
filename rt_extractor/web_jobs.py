@@ -11,6 +11,7 @@ from pathlib import Path
 import re
 import secrets
 import threading
+import time
 from typing import Any, Callable
 import uuid
 
@@ -61,6 +62,9 @@ class Job:
     code_future: Any = field(default=None, repr=False)
     cancel_requested: bool = False
     retry_after: int | None = field(default=None, repr=False)
+    payload: dict | None = field(default=None, repr=False)
+    payload_bytes: int = field(default=0, repr=False)
+    finished_at: float | None = field(default=None, repr=False)
 
     def snapshot(self) -> dict:
         return {
@@ -73,9 +77,15 @@ class Job:
 
 
 class JobManager:
-    def __init__(self, output_dir: Path, extractor: Callable) -> None:
+    def __init__(self, output_dir: Path | None, extractor: Callable, *, ephemeral: bool = False,
+                 worker_slots=None, clock=time.monotonic) -> None:
         self.output_dir = output_dir
         self.extractor = extractor
+        self.ephemeral = ephemeral
+        self.worker_slots = worker_slots
+        self.clock = clock
+        self.retained_bytes = 0
+        self.max_result_bytes = 16 * 1024 * 1024
         self.lock = threading.RLock()
         self.jobs: dict[str, Job] = {}
         self.current_id: str | None = None
@@ -102,7 +112,13 @@ class JobManager:
             self._event(job, "queued", "准备登录")
             self.jobs[job.id] = job
             self.current_id = job.id
-            threading.Thread(target=self._run, args=(job, credentials), daemon=True).start()
+            try:
+                threading.Thread(target=self._run, args=(job, credentials), daemon=True).start()
+            except BaseException:
+                self.jobs.pop(job.id, None)
+                self.current_id = next(reversed(self.jobs), None)
+                credentials.clear()
+                raise
             return job.snapshot()
 
     async def _ask_code(self, job: Job, kind: str) -> str:
@@ -186,6 +202,24 @@ class JobManager:
             with self.lock:
                 if job.cancel_requested:
                     raise asyncio.CancelledError
+                if self.ephemeral:
+                    raw = result.to_dict()
+                    record = {"raw": raw, "cpa": build_cpa_record(raw),
+                              "sub2api": build_sub2api_export([raw])}
+                    size = len(json.dumps(record, ensure_ascii=False).encode("utf-8"))
+                    if size > 512 * 1024 or self.retained_bytes + size > self.max_result_bytes:
+                        raise ExtractionError("待交接结果超出内存额度，请先同步或下载已有结果后重试")
+                    self.retained_bytes += size
+                    job.payload, job.payload_bytes = record, size
+                    job.result = {
+                        "filename": f"tokens-{job.id}.json", "cpa_filename": f"codex-{job.id}.json",
+                        "sub2api_filename": f"sub2api-{job.id}.json", "obtained_at": result.obtained_at,
+                        "expires_at": result.expires_at, "conversion_status": "ready",
+                        "delivery_status": "pending",
+                    }
+                    job.status = "success"
+                    self._event(job, "success", "Token 已获取，等待交接到本浏览器缓存")
+                    return
                 output = (job.output_dir or self.output_dir) / f"tokens-{job.id}.json"
                 save_tokens(result, output)
                 self._event(job, "converting", "Token 已获取，正在自动生成 CPA 和 Sub2API 文件")
@@ -217,7 +251,14 @@ class JobManager:
                 job.status = "success"
                 self._event(job, "success", "Token 已保存，CPA 和 Sub2API 文件已自动生成")
 
+        acquired = False
         try:
+            if self.worker_slots is not None:
+                while not acquired:
+                    with self.lock:
+                        if job.cancel_requested:
+                            raise asyncio.CancelledError
+                    acquired = self.worker_slots.acquire(timeout=.1)
             asyncio.run(execute())
         except asyncio.CancelledError:
             with self.lock:
@@ -225,7 +266,7 @@ class JobManager:
                 self._event(job, "cancelled", "任务已取消")
         except Exception as exc:
             # These classes contain deliberately safe messages in our extractor.
-            message = str(exc) if isinstance(exc, (ExtractionError, ProtocolError)) else "任务失败，请检查网络连接和输出目录权限"
+            message = str(exc) if isinstance(exc, (ExtractionError, ProtocolError)) else "任务失败，请检查网络连接和账号验证状态"
             with self.lock:
                 job.status = "error"
                 job.error = message
@@ -235,12 +276,24 @@ class JobManager:
                         on_rate_limit(exc.retry_after)
                 self._event(job, "error", message)
         finally:
+            if acquired:
+                self.worker_slots.release()
             credentials.clear()
             with self.lock:
+                job.finished_at = self.clock()
                 job.challenge = None
                 job.code_future = None
                 job.loop = None
                 job.task = None
+
+    def acknowledge(self, job: Job) -> None:
+        """Erase transient Token payload after the owning browser cached it."""
+        with self.lock:
+            self.retained_bytes = max(0, self.retained_bytes - job.payload_bytes)
+            job.payload = None
+            job.payload_bytes = 0
+            if job.result:
+                job.result["delivery_status"] = "delivered"
 
 
 def _credentials(payload: Any) -> dict:

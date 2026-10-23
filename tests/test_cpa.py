@@ -1,18 +1,17 @@
 """CPA export and local converter integration, with synthetic credentials only."""
+
 from __future__ import annotations
 
-import io
 import json
 from pathlib import Path
 import tempfile
 import time
 import unittest
-from unittest.mock import patch
-import zipfile
 
 from rt_extractor.api import TokenBundle
 from rt_extractor.cpa import build_cpa_record
 from rt_extractor.web import create_app
+from tests.web_client import browser_headers, workspace_for, new_browser
 from rt_extractor.web_jobs import Job
 
 
@@ -69,7 +68,7 @@ class CPARecordTests(unittest.TestCase):
                 build_cpa_record(record)
 
 
-class CPADownloadTests(unittest.TestCase):
+class CPAHandoffTests(unittest.TestCase):
     def setUp(self):
         self.directory = tempfile.TemporaryDirectory()
         self.output = Path(self.directory.name)
@@ -88,7 +87,7 @@ class CPADownloadTests(unittest.TestCase):
         self.app = create_app(self.output, extractor=dispatch)
         self.app.config["TESTING"] = True
         self.client = self.app.test_client()
-        self.headers = {"X-RT-CSRF": self.app.config["RT_CSRF_TOKEN"]}
+        self.headers = browser_headers(self.app, self.client)
 
     def tearDown(self):
         for batch_id in self.batch_ids:
@@ -128,54 +127,52 @@ class CPADownloadTests(unittest.TestCase):
         for secret in (PASSWORD, SECRET, "synthetic-at-", "synthetic-rt-", "synthetic-id-"):
             self.assertNotIn(secret, text)
 
-    def read_zip(self, batch_id, *, client=None, headers=None):
-        response = (client or self.client).get(
-            f"/api/batches/{batch_id}/cpa-download", headers=headers or self.headers,
+    def test_single_handoff_preserves_tokens_and_expiry_without_files(self):
+        response = self.client.post(
+            "/api/jobs",
+            headers=self.headers,
+            json={
+                "email": "single@example.com",
+                "password": PASSWORD,
+                "totp_secret": SECRET,
+            },
         )
-        self.assertEqual(response.status_code, 200)
-        self.assertEqual(response.mimetype, "application/zip")
-        self.assertIn(f"cpa-{batch_id}.zip", response.headers["Content-Disposition"])
-        self.assertEqual(response.headers["Cache-Control"], "no-store")
-        with zipfile.ZipFile(io.BytesIO(response.get_data())) as archive:
-            self.assertIsNone(archive.testzip())
-            names = archive.namelist()
-            records = [json.loads(archive.read(name)) for name in names]
-        response.close()
-        return names, records
-
-    def test_single_success_download_preserves_tokens_and_expiry(self):
-        response = self.client.post("/api/jobs", headers=self.headers, json={
-            "email": "single@example.com", "password": PASSWORD, "totp_secret": SECRET,
-        })
         self.assertEqual(response.status_code, 202)
         job_id = response.get_json()["id"]
         job = self.wait(f"/api/jobs/{job_id}", {"success", "error"})
         self.assertEqual(job["status"], "success")
         self.assert_no_secrets(job)
-        response = self.client.get(f"/api/jobs/{job_id}/cpa-download", headers=self.headers)
+        response = self.client.get(f"/api/jobs/{job_id}/result", headers=self.headers)
         self.assertEqual(response.status_code, 200)
-        self.assertEqual(response.mimetype, "application/json")
-        self.assertEqual(response.get_json(), expected_record("single@example.com"))
-        self.assertIn(f"codex-{job_id}.json", response.headers["Content-Disposition"])
-        self.assertEqual(response.headers["Cache-Control"], "no-store")
-        response.close()
+        self.assertEqual(
+            response.get_json()["records"][0]["cpa"],
+            expected_record("single@example.com"),
+        )
+        self.assertTrue(response.cache_control.no_store)
+        self.assertEqual(list(self.output.iterdir()), [])
 
-    def test_partial_batch_zip_contains_only_successful_accounts_in_input_order(self):
+    def test_partial_batch_handoff_contains_only_successes_in_input_order(self):
         async def mixed(email, **_kwargs):
             if email.startswith("failed"):
                 raise RuntimeError(f"private error {PASSWORD} {SECRET}")
             return bundle(email)
 
         self.extract = mixed
-        batch = self.complete_batch("first@example.com", "failed@example.com", "last@example.com")
-        self.assertEqual(batch["result"]["cpa_url"], f"/api/batches/{batch['id']}/cpa-download")
-        names, records = self.read_zip(batch["id"])
-        successes = [row for row in batch["rows"] if row["status"] == "success"]
-        self.assertEqual(names, [f"codex-{row['id']}.json" for row in successes])
-        self.assertEqual(records, [expected_record("first@example.com"), expected_record("last@example.com")])
-        self.assertEqual(len(names), len(set(names)))
-        self.assertTrue(all("/" not in name and "\\" not in name for name in names))
+        batch = self.complete_batch(
+            "first@example.com", "failed@example.com", "last@example.com"
+        )
+        response = self.client.get(
+            f"/api/batches/{batch['id']}/results", headers=self.headers
+        )
+        self.assertEqual(response.status_code, 200)
+        records = response.get_json()["records"]
+        self.assertEqual(
+            [r["cpa"] for r in records],
+            [expected_record("first@example.com"), expected_record("last@example.com")],
+        )
+        self.assertEqual([r["line"] for r in records], [1, 3])
         self.assert_no_secrets(batch)
+        self.assertEqual(list(self.output.iterdir()), [])
 
     def test_cpa_downloads_require_csrf_same_origin_and_local_access(self):
         batch = self.complete_batch("guard@example.com")
@@ -192,114 +189,61 @@ class CPADownloadTests(unittest.TestCase):
                     self.assertEqual(response.status_code, 403)
                     self.assert_no_secrets(response.get_json())
 
-    def test_unknown_and_non_successful_jobs_are_not_exportable(self):
-        for path in ("/api/jobs/missing/cpa-download", "/api/batches/missing/cpa-download"):
-            self.assertEqual(self.client.get(path, headers=self.headers).status_code, 404)
-        manager = self.app.extensions["rt_jobs"]
+    def test_deprecated_exports_are_gone_for_owned_jobs_and_unknown_ids_stay_hidden(
+        self,
+    ):
+        for path in (
+            "/api/jobs/missing/cpa-download",
+            "/api/batches/missing/cpa-download",
+        ):
+            self.assertEqual(
+                self.client.get(path, headers=self.headers).status_code, 404
+            )
+        manager = workspace_for(self.app, self.client).jobs
         for status in ("queued", "running", "awaiting_code", "error", "cancelled"):
-            job = Job(id=f"synthetic-{status}", email="pending@example.com", status=status)
+            job = Job(
+                id=f"synthetic-{status}", email="pending@example.com", status=status
+            )
             manager.jobs[job.id] = job
-            response = self.client.get(f"/api/jobs/{job.id}/cpa-download", headers=self.headers)
-            self.assertEqual(response.status_code, 409)
+            response = self.client.get(
+                f"/api/jobs/{job.id}/cpa-download", headers=self.headers
+            )
+            self.assertEqual(response.status_code, 410)
             self.assert_no_secrets(response.get_json())
 
-    def test_active_and_cancelled_without_success_batches_reject_download(self):
-        async def awaiting(email, **kwargs):
-            await kwargs["otp_fetcher"](email)
-            return bundle(email)
-
-        self.extract = awaiting
-        batch_id = self.start_batch("waiting@example.com")
-        self.wait(f"/api/batches/{batch_id}", {"awaiting_code"})
-        path = f"/api/batches/{batch_id}/cpa-download"
-        self.assertEqual(self.client.get(path, headers=self.headers).status_code, 409)
-        self.client.post(f"/api/batches/{batch_id}/cancel", json={}, headers=self.headers)
-        self.wait(f"/api/batches/{batch_id}", {"cancelled"})
-        self.assertEqual(self.client.get(path, headers=self.headers).status_code, 409)
-
-    def test_cancelled_partial_batch_and_individual_downloads_survive_restart(self):
-        async def partial(email, **kwargs):
-            if email.startswith("waiting"):
-                await kwargs["otp_fetcher"](email)
-            return bundle(email)
-
-        self.extract = partial
-        batch_id = self.start_batch("first@example.com", "waiting@example.com", "last@example.com")
-        self.wait(f"/api/batches/{batch_id}", {"awaiting_code"})
-        self.client.post(f"/api/batches/{batch_id}/cancel", json={}, headers=self.headers)
-        done = self.wait(f"/api/batches/{batch_id}", {"cancelled"})
-        self.assertEqual(done["counts"]["success"], 1)
-        original_names, original_records = self.read_zip(batch_id)
-
-        async def forbidden(**_kwargs):
-            self.fail("Exporting saved credentials must not log in again")
-
-        restarted = create_app(self.output, extractor=forbidden)
-        client = restarted.test_client()
-        headers = {"X-RT-CSRF": restarted.config["RT_CSRF_TOKEN"]}
-        current = client.get("/api/batches/current", headers=headers).get_json()["batch"]
-        self.assertEqual(current["id"], batch_id)
-        self.assertEqual(current["result"]["cpa_url"], f"/api/batches/{batch_id}/cpa-download")
-        self.assertEqual(self.read_zip(batch_id, client=client, headers=headers), (original_names, original_records))
-        success = next(row for row in current["rows"] if row["status"] == "success")
-        response = client.get(f"/api/jobs/{success['id']}/cpa-download", headers=headers)
-        self.assertEqual(response.status_code, 200)
-        self.assertEqual(response.get_json(), expected_record("first@example.com"))
-        response.close()
-
-    def test_completed_export_survives_restart(self):
+    def test_completed_results_do_not_survive_server_restart(self):
         batch = self.complete_batch("first@example.com", "second@example.com")
-        expected = self.read_zip(batch["id"])
         restarted = create_app(self.output, extractor=self.extract)
-        client = restarted.test_client()
-        headers = {"X-RT-CSRF": restarted.config["RT_CSRF_TOKEN"]}
-        self.assertEqual(self.read_zip(batch["id"], client=client, headers=headers), expected)
+        client, headers = new_browser(restarted)
+        self.assertIsNone(
+            client.get("/api/batches/current", headers=headers).get_json()["batch"]
+        )
+        self.assertEqual(
+            client.get(
+                f"/api/batches/{batch['id']}/results", headers=headers
+            ).status_code,
+            404,
+        )
         self.assertEqual(self.calls, ["first@example.com", "second@example.com"])
-
-    def test_missing_symlink_and_corrupt_result_files_do_not_partially_export(self):
-        batch = self.complete_batch("first@example.com", "second@example.com")
-        job = batch["rows"][1]
-        path = Path(job["result"]["path"])
-        endpoints = (f"/api/jobs/{job['id']}/cpa-download", f"/api/batches/{batch['id']}/cpa-download")
-        path.unlink()
-        for endpoint in endpoints:
-            response = self.client.get(endpoint, headers=self.headers)
-            self.assertEqual(response.status_code, 404 if "/jobs/" in endpoint else 409)
-            self.assert_no_secrets(response.get_json())
-        target = self.output / "synthetic-target.json"
-        target.write_text(json.dumps(bundle("second@example.com").to_dict()), encoding="utf-8")
-        path.symlink_to(target)
-        for endpoint in endpoints:
-            response = self.client.get(endpoint, headers=self.headers)
-            self.assertEqual(response.status_code, 404 if "/jobs/" in endpoint else 409)
-            self.assert_no_secrets(response.get_json())
-        path.unlink()
-        bad_records = ["{not-json", json.dumps([]), json.dumps({"access_token": "synthetic-at-private"}),
-                       json.dumps({**bundle("second@example.com").to_dict(), "email": None})]
-        for text in bad_records:
-            path.write_text(text, encoding="utf-8")
-            for endpoint in endpoints:
-                with self.subTest(text=text[:20], endpoint=endpoint):
-                    response = self.client.get(endpoint, headers=self.headers)
-                    self.assertEqual(response.status_code, 409)
-                    self.assert_no_secrets(response.get_json())
-        with patch.object(Path, "read_text", side_effect=OSError("private read failure synthetic-rt-private")):
-            for endpoint in endpoints:
-                response = self.client.get(endpoint, headers=self.headers)
-                self.assertEqual(response.status_code, 409)
-                self.assert_no_secrets(response.get_json())
 
     def test_converter_page_and_local_modules_are_packaged_and_served(self):
         response = self.client.get("/converter")
         self.assertEqual(response.status_code, 200)
         self.assertIn("converter-ui.mjs", response.get_data(as_text=True))
         self.assertIn("script-src 'self'", response.headers["Content-Security-Policy"])
-        self.assertEqual(response.headers["Cache-Control"], "no-store")
-        for asset in ("converter-ui.mjs", "converter.mjs", "archive.mjs", "paste-input.mjs"):
+        self.assertTrue(response.cache_control.no_store)
+        for asset in (
+            "converter-ui.mjs",
+            "converter.mjs",
+            "archive.mjs",
+            "paste-input.mjs",
+        ):
             with self.subTest(asset=asset):
                 response = self.client.get(f"/static/{asset}")
                 self.assertEqual(response.status_code, 200)
-                self.assertIn(response.mimetype, {"text/javascript", "application/javascript"})
+                self.assertIn(
+                    response.mimetype, {"text/javascript", "application/javascript"}
+                )
                 response.close()
 
 

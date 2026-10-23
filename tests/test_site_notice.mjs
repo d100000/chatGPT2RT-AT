@@ -41,6 +41,15 @@ test('acknowledgement persists only a timestamp and is reused by other tools in 
   assert.equal(nextWeek.isDue(), true);
 });
 
+test('an acknowledgement of the old server-file policy cannot suppress the new privacy declaration', () => {
+  const localStorage = storage();
+  localStorage.setItem('bob-ai-site-notice-acknowledged-at-v1', String(NOW));
+  const memory = createNoticeMemory({ localStorage, now: () => NOW + 1000 });
+  assert.equal(memory.isDue(), true);
+  memory.acknowledge();
+  assert.equal(memory.isDue(), false);
+});
+
 test('storage read errors fall back to session acknowledgement without blocking the page', () => {
   const blocked = { getItem() { throw new Error('blocked'); }, setItem() { throw new Error('blocked'); } };
   const sessionStorage = storage();

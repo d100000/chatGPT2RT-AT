@@ -2,18 +2,15 @@
 
 from __future__ import annotations
 
-import asyncio
-import io
 import json
-import os
 from pathlib import Path
 import tempfile
 import time
 import unittest
-import zipfile
 
 from rt_extractor.api import TokenBundle
 from rt_extractor.web import create_app
+from tests.web_client import browser_headers
 
 
 SECRET = "JBSWY3DPEHPK3PXP"
@@ -53,7 +50,7 @@ class BatchWebTests(unittest.TestCase):
         self.app = create_app(output_dir=self.output_dir, extractor=dispatch)
         self.app.config.update(TESTING=True)
         self.client = self.app.test_client()
-        self.headers = {"X-RT-CSRF": self.app.config["RT_CSRF_TOKEN"]}
+        self.headers = browser_headers(self.app, self.client)
 
     def tearDown(self):
         for batch_id in self.batch_ids:
@@ -103,23 +100,15 @@ class BatchWebTests(unittest.TestCase):
         for secret in (PASSWORD, SECRET, "synthetic-at:", "synthetic-rt:", "synthetic-id:"):
             self.assertNotIn(secret, serialized)
 
-    def zip_contents(self, batch_id):
-        response = self.client.get(f"/api/batches/{batch_id}/download", headers=self.headers)
-        self.assertEqual(response.status_code, 200, response.get_data(as_text=True) if response.status_code != 200 else "")
-        self.assertIn("attachment", response.headers.get("Content-Disposition", ""))
-        raw = response.get_data()
-        response.close()
-        with zipfile.ZipFile(io.BytesIO(raw)) as archive:
-            names = archive.namelist()
-            self.assertTrue(any(Path(name).name == "manifest.json" for name in names))
-            self.assertTrue(all(not name.startswith("/") and ".." not in Path(name).parts for name in names))
-            documents = {
-                name: json.loads(archive.read(name)) for name in names if name.endswith(".json")
-            }
-        contents = json.dumps(documents)
-        self.assertNotIn(PASSWORD, contents)
-        self.assertNotIn(SECRET, contents)
-        return documents
+    def handoff_tokens(self, batch_id):
+        response = self.client.get(
+            f"/api/batches/{batch_id}/results", headers=self.headers
+        )
+        self.assertEqual(response.status_code, 200)
+        return {
+            f"{record['id']}.json": record["raw"]
+            for record in response.get_json()["records"]
+        }
 
     def test_empty_current_and_batch_endpoints_require_csrf(self):
         response = self.client.get("/api/batches/current", headers=self.headers)
@@ -179,7 +168,9 @@ class BatchWebTests(unittest.TestCase):
             self.assert_redacted(response.get_json())
         self.assertEqual(self.calls, [])
 
-    def test_one_failure_does_not_stop_later_accounts_and_downloads_only_successes(self):
+    def test_one_failure_does_not_stop_later_accounts_and_downloads_only_successes(
+        self,
+    ):
         async def mixed(email, _password, **_kwargs):
             if email.startswith("bad"):
                 raise RuntimeError(f"response leaked {PASSWORD} {SECRET} synthetic-rt:bad@example.com")
@@ -193,53 +184,78 @@ class BatchWebTests(unittest.TestCase):
         self.assertEqual(done["counts"]["total"], 3)
         self.assertEqual(done["counts"]["success"], 2)
         self.assertEqual(done["counts"]["error"], 1)
-        self.assertEqual([row["status"] for row in done["rows"]], ["success", "error", "success"])
+        self.assertEqual(
+            [row["status"] for row in done["rows"]], ["success", "error", "success"]
+        )
         self.assert_redacted(done)
-        documents = self.zip_contents(batch["id"])
-        tokens = [document for document in documents.values() if isinstance(document, dict) and "refresh_token" in document]
+        documents = self.handoff_tokens(batch["id"])
+        tokens = [
+            document
+            for document in documents.values()
+            if isinstance(document, dict) and "refresh_token" in document
+        ]
         self.assertEqual({token["email"] for token in tokens}, {emails[0], emails[2]})
         for token in tokens:
             self.assertEqual(token, bundle(token["email"]).to_dict())
-        manifest = next(value for name, value in documents.items() if Path(name).name == "manifest.json")
-        self.assert_redacted(manifest)
-        rt = self.client.get(f"/api/batches/{batch['id']}/rt-download", headers=self.headers)
-        self.assertEqual(rt.status_code, 200)
-        self.assertEqual(rt.get_data(as_text=True).splitlines(), [bundle(emails[0]).refresh_token, bundle(emails[2]).refresh_token])
-        rt.close()
+        old = self.client.get(
+            f"/api/batches/{batch['id']}/rt-download", headers=self.headers
+        )
+        self.assertEqual(old.status_code, 410)
+        self.assert_redacted(old.get_json())
 
-    def test_fifteen_rows_keep_their_single_downloads_and_private_files(self):
+    def test_fifteen_rows_remain_isolated_in_memory_without_private_files(self):
         emails = [f"person{i}@example.com" for i in range(15)]
         batch = self.start("\n".join(record(email) for email in emails))
         done = self.wait_batch(batch["id"], {"completed"})
         self.assertEqual(done["counts"]["success"], len(emails))
         self.assertEqual(len(done["rows"]), len(emails))
         for row in done["rows"]:
-            response = self.client.get(f"/api/jobs/{row['id']}/download", headers=self.headers)
+            response = self.client.get(
+                f"/api/jobs/{row['id']}/result", headers=self.headers
+            )
             self.assertEqual(response.status_code, 200)
-            self.assertEqual(json.loads(response.get_data()), bundle(row["email"]).to_dict())
-            response.close()
-            output = Path(row["result"]["path"])
-            self.assertTrue(output.resolve().is_relative_to(self.output_dir.resolve()))
-            if os.name == "posix":
-                self.assertEqual(output.stat().st_mode & 0o777, 0o600)
+            self.assertEqual(
+                response.get_json()["records"][0]["raw"], bundle(row["email"]).to_dict()
+            )
+            self.assertNotIn("path", row["result"])
+        self.assertEqual(list(self.output_dir.iterdir()), [])
         self.assert_redacted(done)
+        self.assertEqual(len(self.handoff_tokens(batch["id"])), 15)
+        denied = self.client.post(
+            "/api/jobs",
+            json={
+                "email": "later-single@example.com",
+                "password": PASSWORD,
+                "totp_secret": SECRET,
+            },
+            headers=self.headers,
+        )
+        self.assertEqual(denied.status_code, 409)
+        response = self.client.post(
+            f"/api/batches/{batch['id']}/ack",
+            json={"ids": [row["id"] for row in done["rows"]], "complete": True},
+            headers=self.headers,
+        )
+        self.assertEqual(response.status_code, 200)
         single = self.client.post(
-            "/api/jobs", json={"email": "later-single@example.com", "password": PASSWORD, "totp_secret": SECRET},
+            "/api/jobs",
+            json={
+                "email": "later-single@example.com",
+                "password": PASSWORD,
+                "totp_secret": SECRET,
+            },
             headers=self.headers,
         )
         self.assertEqual(single.status_code, 202)
         single_id = single.get_json()["id"]
         self.single_ids.append(single_id)
         self.wait_job(single_id, {"success"})
-        # Starting a standalone job must not prune earlier batch rows from its
-        # legacy twelve-item standalone history.
-        first = done["rows"][0]
-        download = self.client.get(f"/api/jobs/{first['id']}/download", headers=self.headers)
-        self.assertEqual(download.status_code, 200)
-        self.assertEqual(json.loads(download.get_data()), bundle(first["email"]).to_dict())
-        download.close()
-        documents = self.zip_contents(batch["id"])
-        self.assertEqual(sum("refresh_token" in value for value in documents.values()), 15)
+        self.assertEqual(
+            self.client.get(
+                f"/api/batches/{batch['id']}/results", headers=self.headers
+            ).status_code,
+            404,
+        )
 
     def test_501_accounts_are_accepted_without_request_size_or_page_truncation(self):
         async def waiting(email, _password, **kwargs):
@@ -285,27 +301,49 @@ class BatchWebTests(unittest.TestCase):
             return bundle(email)
 
         self.extract = challenged
-        batch = self.start("\n".join(record(email) for email in (
-            "first@example.com", "second@example.com", "third@example.com",
-        )))
+        batch = self.start(
+            "\n".join(
+                record(email)
+                for email in (
+                    "first@example.com",
+                    "second@example.com",
+                    "third@example.com",
+                )
+            )
+        )
         waiting = self.wait_batch(batch["id"], {"awaiting_code"})
         current = waiting["current"]
-        pending_download = self.client.get(f"/api/batches/{batch['id']}/download", headers=self.headers)
-        self.assertEqual(pending_download.status_code, 409)
-        response = self.client.post(f"/api/batches/{batch['id']}/cancel", json={}, headers=self.headers)
+        pending_download = self.client.get(
+            f"/api/batches/{batch['id']}/download", headers=self.headers
+        )
+        self.assertEqual(pending_download.status_code, 410)
+        response = self.client.post(
+            f"/api/batches/{batch['id']}/cancel", json={}, headers=self.headers
+        )
         self.assertEqual(response.status_code, 200)
         done = self.wait_batch(batch["id"], {"cancelled"})
         self.assertEqual(done["counts"]["success"], 1)
         self.assertEqual(done["counts"]["cancelled"], 2)
-        self.assertEqual([call[0] for call in self.calls], ["first@example.com", "second@example.com"])
-        self.assertEqual([row["status"] for row in done["rows"]], ["success", "cancelled", "cancelled"])
+        self.assertEqual(
+            [call[0] for call in self.calls],
+            ["first@example.com", "second@example.com"],
+        )
+        self.assertEqual(
+            [row["status"] for row in done["rows"]],
+            ["success", "cancelled", "cancelled"],
+        )
         late = self.client.post(
-            f"/api/jobs/{current['id']}/code", json={"challenge_id": current["challenge"]["id"], "code": "123456"},
+            f"/api/jobs/{current['id']}/code",
+            json={"challenge_id": current["challenge"]["id"], "code": "123456"},
             headers=self.headers,
         )
         self.assertEqual(late.status_code, 409)
-        documents = self.zip_contents(batch["id"])
-        tokens = [document for document in documents.values() if isinstance(document, dict) and "refresh_token" in document]
+        documents = self.handoff_tokens(batch["id"])
+        tokens = [
+            document
+            for document in documents.values()
+            if isinstance(document, dict) and "refresh_token" in document
+        ]
         self.assertEqual(tokens, [bundle("first@example.com").to_dict()])
         self.assert_redacted(done)
 
@@ -347,8 +385,10 @@ class BatchWebTests(unittest.TestCase):
         self.assertEqual(done["counts"]["error"], 1)
         self.assertEqual(done["counts"]["success"], 0)
         for suffix in ("download", "rt-download"):
-            response = self.client.get(f"/api/batches/{batch['id']}/{suffix}", headers=self.headers)
-            self.assertEqual(response.status_code, 409)
+            response = self.client.get(
+                f"/api/batches/{batch['id']}/{suffix}", headers=self.headers
+            )
+            self.assertEqual(response.status_code, 410)
 
 
 if __name__ == "__main__":

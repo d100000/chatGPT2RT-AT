@@ -1,4 +1,5 @@
 """Static documentation, explicit public origins, and private surface indexing."""
+
 from __future__ import annotations
 
 from html.parser import HTMLParser
@@ -13,6 +14,7 @@ from xml.etree import ElementTree
 
 from rt_extractor.seo import DOC_PAGES, REPOSITORY_URL, validate_public_url
 from rt_extractor.web import create_app
+from tests.web_client import browser_headers
 
 
 PUBLIC_URL = "https://tools.example.com"
@@ -286,8 +288,14 @@ class SEOTests(unittest.TestCase):
 
     def test_api_health_download_and_errors_are_explicitly_not_indexable(self):
         app, client = self.app(PUBLIC_URL)
-        headers = {"X-RT-CSRF": app.config["RT_CSRF_TOKEN"]}
-        for path in ("/health", "/api/jobs/current", "/api/jobs/missing/download", "/docs/missing", "/missing"):
+        headers = browser_headers(app, client)
+        for path in (
+            "/health",
+            "/api/jobs/current",
+            "/api/jobs/missing/download",
+            "/docs/missing",
+            "/missing",
+        ):
             response = client.get(path, headers=headers)
             for directive in ("noindex", "nosnippet", "noarchive"):
                 self.assertIn(directive, response.headers["X-Robots-Tag"])

@@ -1,4 +1,5 @@
 import { createRequestCooldowns, rateLimitError, requestLimitAction } from './request-limits.mjs';
+import { getBrowserResults, collectBatchResults, isBatchCollected, resetResultCollection, resultDownload, cachedBatchWithoutServer, withBrowserResultLock } from './browser-results.mjs';
 
 (() => {
   'use strict';
@@ -21,12 +22,14 @@ import { createRequestCooldowns, rateLimitError, requestLimitAction } from './re
   let initializeTimer = null;
   let cooldownTimer = null;
   const cooldowns = createRequestCooldowns({ now: () => Date.now() });
-  const coolingDownloads = new Set();
+  const resultStore = getBrowserResults();
+  let clearing = false;
+  let cleanupRetry = false;
+  let expiryTimer = null;
   const activeEntries = new Map();
   let lastRows = '';
   let networkNotice = false;
   let rtAccount = null;
-  let rtRequest = null;
   let rtGeneration = 0;
 
   function showError(message, errors = []) {
@@ -44,7 +47,7 @@ import { createRequestCooldowns, rateLimitError, requestLimitAction } from './re
 
   function connection(online) {
     byId('connection').classList.toggle('offline', !online);
-    byId('connection-label').textContent = online ? '本地服务已连接' : '本地服务连接中断';
+    byId('connection-label').textContent = online ? '会话服务已连接' : '会话服务连接中断';
   }
 
   async function request(path, options = {}) {
@@ -60,7 +63,7 @@ import { createRequestCooldowns, rateLimitError, requestLimitAction } from './re
     } catch (error) {
       if (error.name === 'AbortError') throw error;
       connection(false);
-      throw new Error('无法连接本地服务，请确认服务仍在运行。');
+      throw new Error('无法连接会话服务，请稍后重试。');
     }
     connection(true);
     if (!response.ok) {
@@ -83,13 +86,8 @@ import { createRequestCooldowns, rateLimitError, requestLimitAction } from './re
     clearTimeout(cooldownTimer);
     updateControls();
     const retry = byId('rt-retry-button');
-    const downloadRemaining = cooldowns.remaining('download');
-    retry.disabled = downloadRemaining > 0;
-    retry.textContent = downloadRemaining ? `${downloadRemaining} 秒后重试` : '重试';
-    for (const button of coolingDownloads) {
-      button.disabled = downloadRemaining > 0;
-      if (!downloadRemaining) coolingDownloads.delete(button);
-    }
+    retry.disabled = false;
+    retry.textContent = '重试';
     if (cooldowns.active()) cooldownTimer = setTimeout(refreshCooldownControls, 1000);
   }
 
@@ -110,7 +108,7 @@ import { createRequestCooldowns, rateLimitError, requestLimitAction } from './re
   function updateControls() {
     const active = !!batch && activeStates.has(batch.status);
     const stopping = cancelling || batch?.status === 'cancelling';
-    const busy = active || submitting || importing || initializing;
+    const busy = active || submitting || importing || initializing || clearing;
     byId('credentials-fields').disabled = busy;
     const submitRemaining = cooldowns.remaining('submit');
     const cancelRemaining = cooldowns.remaining('cancel');
@@ -119,6 +117,8 @@ import { createRequestCooldowns, rateLimitError, requestLimitAction } from './re
     byId('cancel-button').hidden = !active;
     byId('cancel-button').disabled = stopping || cancelRemaining > 0;
     byId('cancel-button').textContent = stopping ? '正在取消…' : cancelRemaining ? `${cancelRemaining} 秒后可取消` : '取消整批';
+    const clear = byId('clear-browser-results');
+    if (clear) clear.disabled = clearing || submitting || (!cleanupRetry && !batch && !resultStore.read());
     for (const entry of activeEntries.values()) updateCodeControls(entry);
   }
 
@@ -291,8 +291,6 @@ import { createRequestCooldowns, rateLimitError, requestLimitAction } from './re
 
   function clearRt() {
     rtGeneration += 1;
-    rtRequest?.abort();
-    rtRequest = null;
     rtAccount = null;
     byId('rt-value').value = '';
     byId('rt-value-field').hidden = true;
@@ -313,37 +311,24 @@ import { createRequestCooldowns, rateLimitError, requestLimitAction } from './re
   async function viewRt(account) {
     clearRt();
     rtAccount = { id: account.id, email: account.email };
-    const generation = rtGeneration;
     const dialog = byId('rt-dialog');
-    const controller = new AbortController();
-    rtRequest = controller;
     byId('rt-view-email').textContent = account.email;
-    byId('rt-view-status').textContent = '正在读取 RT…';
-    dialog.setAttribute('aria-busy', 'true');
     if (!dialog.open) dialog.showModal();
-    try {
-      const result = await jsonRequest(`/api/jobs/${encodeURIComponent(account.id)}/rt`, { signal: controller.signal });
-      if (generation !== rtGeneration || !dialog.open) return;
-      if (typeof result.refresh_token !== 'string' || !result.refresh_token.trim()) throw new Error('结果中没有可查看的 RT。');
-      byId('rt-value').value = result.refresh_token;
-      byId('rt-value-field').hidden = false;
-      byId('rt-copy-button').disabled = false;
-      byId('rt-view-status').textContent = '已显示完整 RT，可复制或选中内容。';
-    } catch (error) {
-      if (generation !== rtGeneration || !dialog.open || error.name === 'AbortError') return;
-      byId('rt-view-status').textContent = error.message;
+    const record = resultStore.record(account.id);
+    if (!record) {
+      byId('rt-view-status').textContent = '结果尚未接收到本浏览器，或浏览器缓存已过期。';
       byId('rt-view-status').classList.add('failed');
-      byId('rt-retry-button').hidden = false;
-    } finally {
-      if (generation === rtGeneration) {
-        rtRequest = null;
-        dialog.removeAttribute('aria-busy');
-      }
+      return;
     }
+    byId('rt-value').value = record.raw.refresh_token;
+    byId('rt-value-field').hidden = false;
+    byId('rt-copy-button').disabled = false;
+    byId('rt-view-status').textContent = '从本浏览器缓存读取完整 RT。';
   }
 
   function renderRows(rows) {
-    const signature = JSON.stringify(rows);
+    const recordIds = new Set(resultStore.read()?.records.map((record) => record.id));
+    const signature = JSON.stringify([rows, [...recordIds]]);
     if (signature === lastRows) return;
     lastRows = signature;
     const fragment = document.createDocumentFragment();
@@ -361,7 +346,8 @@ import { createRequestCooldowns, rateLimitError, requestLimitAction } from './re
       if (row.error || (row.message && row.status !== 'queued')) {
         const message = document.createElement('div');
         message.className = `row-message${row.status === 'error' ? ' failed' : ''}`;
-        message.textContent = row.error || row.message;
+        message.textContent = row.status === 'success' && recordIds.has(row.id)
+          ? '已接收到本浏览器，下载文件由浏览器生成' : row.error || row.message;
         account.append(message);
       }
       const status = document.createElement('td');
@@ -371,7 +357,7 @@ import { createRequestCooldowns, rateLimitError, requestLimitAction } from './re
       badge.textContent = rowLabels[row.status] || row.status;
       status.append(badge);
       const result = document.createElement('td');
-      if (row.status === 'success' && row.result) {
+      if (row.status === 'success' && recordIds.has(row.id)) {
         const actions = document.createElement('div');
         actions.className = 'row-actions';
         const view = document.createElement('button');
@@ -386,19 +372,19 @@ import { createRequestCooldowns, rateLimitError, requestLimitAction } from './re
         download.className = 'row-download';
         download.textContent = '原始 JSON ↓';
         download.setAttribute('aria-label', `下载 ${row.email} 的原始 Token JSON`);
-        download.addEventListener('click', () => downloadFile(`/api/jobs/${encodeURIComponent(row.id)}/download`, row.result.filename || 'tokens.json', download));
+        download.addEventListener('click', () => downloadLocal('raw', download, row.id));
         const cpa = document.createElement('button');
         cpa.type = 'button';
         cpa.className = 'row-download';
         cpa.textContent = 'CPA JSON ↓';
         cpa.setAttribute('aria-label', `下载 ${row.email} 的 CPA 认证 JSON`);
-        cpa.addEventListener('click', () => downloadFile(`/api/jobs/${encodeURIComponent(row.id)}/cpa-download`, `codex-${row.id}.json`, cpa));
+        cpa.addEventListener('click', () => downloadLocal('cpa', cpa, row.id));
         const sub2api = document.createElement('button');
         sub2api.type = 'button';
         sub2api.className = 'row-download';
         sub2api.textContent = 'Sub2API JSON ↓';
         sub2api.setAttribute('aria-label', `下载 ${row.email} 的 Sub2API JSON`);
-        sub2api.addEventListener('click', () => downloadFile(`/api/jobs/${encodeURIComponent(row.id)}/sub2api-download`, `sub2api-${row.id}.json`, sub2api));
+        sub2api.addEventListener('click', () => downloadLocal('sub2api', sub2api, row.id));
         actions.append(view, cpa, sub2api, download);
         result.append(actions);
       } else {
@@ -449,32 +435,35 @@ import { createRequestCooldowns, rateLimitError, requestLimitAction } from './re
     renderRows(batch?.rows || []);
 
     renderActiveJobs(batch?.active_jobs || []);
-    const downloadable = !!batch?.result && counts.success > 0 && ['completed', 'cancelled'].includes(batch.status);
+    const cached = resultStore.read();
+    const downloadable = !!cached && cached.batch.id === batch?.id && cached.records.length > 0;
     byId('downloads').hidden = !downloadable;
-    byId('result-path').textContent = downloadable ? batch.result.directory || '' : '';
-    const conversionStatus = byId('conversion-status');
-    const conversionState = batch?.result?.conversion_status;
-    const conversionHeading = byId('conversion-heading');
-    const conversionBadge = byId('conversion-badge');
-    if (conversionHeading) conversionHeading.textContent = conversionState === 'ready'
-      ? 'CPA / Sub2API 已自动生成' : conversionState === 'error' ? '自动保存未完成' : '成功结果与导出';
-    if (conversionBadge) {
-      conversionBadge.textContent = conversionState === 'ready' ? '已保存' : conversionState === 'error' ? '可按需下载' : '可导出';
-      conversionBadge.className = `job-badge ${conversionState === 'error' ? 'error' : 'success'}`;
+    const storageStatus = resultStore.status();
+    byId('result-path').textContent = downloadable
+      ? storageStatus.persistence === 'memory' ? '仅保留在当前页面内存；请立即下载。' : '仅保存在本浏览器缓存；下载由浏览器生成。' : '';
+    byId('conversion-heading').textContent = '本浏览器中的成功结果';
+    byId('conversion-badge').textContent = downloadable ? storageStatus.persistence === 'memory' ? '当前页面内存' : '浏览器缓存' : '等待接收';
+    byId('conversion-badge').className = 'job-badge success';
+    byId('conversion-status').textContent = downloadable
+      ? `${cached.records.length} 个账号已接收到本浏览器，CPA / Sub2API 文件在本地生成。` : '';
+    const notice = byId('browser-cache-status');
+    if (notice) notice.textContent = storageStatus.notice || '结果在本浏览器缓存中有效期为 30 分钟；页面运行或下次读取时清理过期缓存。服务器确认交接后即清除临时结果。';
+    const clearButton = byId('clear-browser-results');
+    if (clearButton) {
+      clearButton.disabled = clearing || submitting || (!cleanupRetry && !batch && !cached);
+      clearButton.textContent = clearing ? '正在清除…' : cleanupRetry ? '重试清理临时任务' : activeStates.has(batch?.status) ? '结束任务并清除' : '清除本浏览器结果';
+      clearButton.title = '清除本浏览器结果并结束本会话的临时任务，其他用户不受影响。';
     }
-    if (conversionStatus) {
-      conversionStatus.textContent = !downloadable ? '' : batch.result.conversion_status === 'ready'
-        ? 'CPA 和 Sub2API 已自动生成并保存，可直接下载。'
-        : batch.result.conversion_status === 'error'
-          ? batch.result.conversion_error || '自动保存未完成，仍可从已成功账号按需下载。'
-          : '这是此前保存的批次，可按需生成 CPA 和 Sub2API 下载。';
-      conversionStatus.classList.toggle('failed', batch?.result?.conversion_status === 'error');
-    }
+    clearTimeout(expiryTimer);
+    if (cached) expiryTimer = setTimeout(() => {
+      hideRt();
+      if (!resultStore.read() && !activeStates.has(batch?.status)) { render(null); showError('本浏览器缓存已过期并清除。'); }
+    }, Math.max(1, cached.expiresAt - Date.now()));
   }
 
   function schedulePoll(delay = 1000) {
     clearTimeout(pollTimer);
-    if (!document.hidden && batch && activeStates.has(batch.status)) pollTimer = setTimeout(pollBatch, Math.max(delay, cooldowns.delay('poll')));
+    if (!document.hidden && batch && (activeStates.has(batch.status) || !isBatchCollected(batch.id))) pollTimer = setTimeout(pollBatch, Math.max(delay, cooldowns.delay('poll')));
   }
 
   async function pollBatch() {
@@ -487,14 +476,21 @@ import { createRequestCooldowns, rateLimitError, requestLimitAction } from './re
     const id = batch.id;
     const generation = ++pollRequest;
     try {
-      const current = await jsonRequest(`/api/batches/${encodeURIComponent(id)}`);
+      const current = activeStates.has(batch.status)
+        ? await jsonRequest(`/api/batches/${encodeURIComponent(id)}`) : batch;
+      if (batch?.id !== id || generation !== pollRequest || clearing) return;
+      const received = await collectBatchResults(current, jsonRequest);
       if (batch?.id !== id || generation !== pollRequest) return;
       if (batch?.id === id) {
-        render(current);
+        render(received || current);
         if (networkNotice) { showError(''); networkNotice = false; }
       }
     } catch (error) {
       if (batch?.id !== id || generation !== pollRequest) return;
+      if (error.status === 404) {
+        const cached = resultStore.read();
+        if (cached?.batch.id === id) { render(cached.batch); retry = false; return; }
+      }
       networkNotice = true;
       showError(error.status === 403 || error.status === 429 ? error.message : `${error.message} 正在重新获取批次状态。`);
       nextDelay = error.status === 429 ? error.retryAfter * 1000 : 3000;
@@ -505,26 +501,18 @@ import { createRequestCooldowns, rateLimitError, requestLimitAction } from './re
     }
   }
 
-  async function downloadFile(path, filename, button) {
+  function downloadLocal(kind, button, jobId = null) {
     if (button.disabled) return;
     button.disabled = true;
     try {
-      const response = await request(path);
-      const url = URL.createObjectURL(await response.blob());
+      const { blob, filename } = resultDownload(resultStore.read(), kind, jobId);
+      const url = URL.createObjectURL(blob);
       const link = document.createElement('a');
-      link.href = url;
-      link.download = filename;
-      document.body.append(link);
-      link.click();
-      link.remove();
+      link.href = url; link.download = filename;
+      document.body.append(link); link.click(); link.remove();
       setTimeout(() => URL.revokeObjectURL(url), 1000);
     } catch (error) { showError(error.message); }
-    finally {
-      if (cooldowns.remaining('download')) {
-        coolingDownloads.add(button);
-        refreshCooldownControls();
-      } else button.disabled = false;
-    }
+    finally { button.disabled = false; }
   }
 
   byId('accounts-text').addEventListener('input', () => { updateCount(); byId('file-name').textContent = ''; });
@@ -591,11 +579,15 @@ import { createRequestCooldowns, rateLimitError, requestLimitAction } from './re
     showError('');
     updateControls();
     try {
-      const accepted = await jsonRequest('/api/batches', { method: 'POST', body: JSON.stringify(body) });
+      const accepted = await withBrowserResultLock(async () => {
+        const value = await jsonRequest('/api/batches', { method: 'POST', body: JSON.stringify(body) });
+        resultStore.save(value); return value;
+      });
       byId('accounts-text').value = '';
       byId('accounts-file').value = '';
       byId('file-name').textContent = '';
       updateCount();
+      resetResultCollection();
       render(accepted);
       schedulePoll();
     } catch (error) { showError(error.message, error.errors || []); }
@@ -615,25 +607,28 @@ import { createRequestCooldowns, rateLimitError, requestLimitAction } from './re
     finally { cancelling = false; updateControls(); }
   });
 
-  byId('sub2api-button').addEventListener('click', () => {
-    if (!batch?.result) return;
-    const selected = batch;
-    downloadFile(`/api/batches/${encodeURIComponent(selected.id)}/sub2api-download`, `sub2api-${selected.id}.json`, byId('sub2api-button'));
-  });
-  byId('cpa-button').addEventListener('click', () => {
-    if (!batch?.result) return;
-    const selected = batch;
-    downloadFile(`/api/batches/${encodeURIComponent(selected.id)}/cpa-download`, `cpa-${selected.id}.zip`, byId('cpa-button'));
-  });
-  byId('zip-button').addEventListener('click', () => {
-    if (!batch?.result) return;
-    const selected = batch;
-    downloadFile(`/api/batches/${encodeURIComponent(selected.id)}/download`, `tokens-${selected.id}.zip`, byId('zip-button'));
-  });
-  byId('rt-button').addEventListener('click', () => {
-    if (!batch?.result) return;
-    const selected = batch;
-    downloadFile(`/api/batches/${encodeURIComponent(selected.id)}/rt-download`, `refresh-tokens-${selected.id}.txt`, byId('rt-button'));
+  for (const [id, kind] of [['sub2api-button', 'sub2api'], ['cpa-button', 'cpa'], ['zip-button', 'raw'], ['rt-button', 'rt']]) {
+    byId(id).addEventListener('click', () => downloadLocal(kind, byId(id)));
+  }
+  byId('clear-browser-results')?.addEventListener('click', async () => {
+    if (clearing || submitting) return;
+    clearing = true; clearTimeout(pollTimer); clearTimeout(initializeTimer); pollRequest += 1;
+    hideRt(); clearActiveJobs(); resetResultCollection(); render(null);
+    initializing = false;
+    byId('accounts-text').value = ''; byId('proxy').value = ''; updateCount();
+    try {
+      await withBrowserResultLock(async () => {
+        resetResultCollection(); resultStore.clear();
+        document.dispatchEvent(new CustomEvent('rt:results-cleared'));
+        await jsonRequest('/api/workspace', { method: 'DELETE' });
+      });
+      cleanupRetry = false;
+      showError('');
+      document.dispatchEvent(new CustomEvent('rt:results-cleared'));
+    } catch (error) {
+      cleanupRetry = true;
+      showError(`本浏览器结果已清除；服务器临时任务清理未确认。${error.message} 请重试清理。`);
+    } finally { clearing = false; render(batch); }
   });
 
   async function initialize() {
@@ -644,20 +639,36 @@ import { createRequestCooldowns, rateLimitError, requestLimitAction } from './re
       return;
     }
     initializePending = true;
+    const generation = pollRequest;
+    const previousId = resultStore.read()?.batch.id ?? null;
     try {
       const payload = await jsonRequest('/api/batches/current');
-      render(payload.batch || null);
+      if (generation !== pollRequest || clearing) return;
+      let current = payload.batch || cachedBatchWithoutServer(resultStore, previousId);
+      if (payload.batch) current = await collectBatchResults(payload.batch, jsonRequest) || current;
+      if (generation !== pollRequest || clearing) return;
+      render(current);
       showError('');
       initializing = false;
       updateControls();
       schedulePoll();
     } catch (error) {
+      if (generation !== pollRequest || clearing) return;
       showError(error.status === 403 || error.status === 429 ? error.message : `${error.message} 正在重新连接。`);
       if (error.status !== 403) initializeTimer = setTimeout(initialize, error.status === 429 ? error.retryAfter * 1000 : 3000);
     } finally {
       initializePending = false;
     }
   }
+  document.addEventListener('rt:browser-results', () => {
+    hideRt();
+    if (clearing || submitting) return;
+    const cached = resultStore.read();
+    if (!cached) { pollRequest += 1; initializing = false; clearTimeout(pollTimer); resetResultCollection(); render(null); return; }
+    const snapshot = cached.batch;
+    if (batch?.id === snapshot.id && activeStates.has(snapshot.status)) snapshot.active_jobs = batch.active_jobs || [];
+    render(snapshot); schedulePoll();
+  });
   document.addEventListener('visibilitychange', () => {
     if (!document.hidden) {
       refreshCooldownControls();
@@ -665,5 +676,7 @@ import { createRequestCooldowns, rateLimitError, requestLimitAction } from './re
     } else clearTimeout(pollTimer);
   });
   updateCount();
+  const initialCache = resultStore.read();
+  if (initialCache) render(initialCache.batch);
   initialize();
 })();

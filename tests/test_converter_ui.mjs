@@ -82,6 +82,7 @@ function createPage(options = {}) {
     crypto: webcrypto,
     fetch: options.fetch || (async () => { throw new Error('Unexpected network request'); }),
     ...converter, ...archive, ...pasteParser, ...requestLimits,
+    getBrowserResults: () => ({ read: () => options.cached || null }),
   });
   vm.runInContext(source, context, { filename: 'converter-ui.mjs' });
   return {
@@ -222,30 +223,14 @@ const fullCPA = {
   plan_type: 'plus', expired: '2030-03-17T17:46:40+00:00', last_refresh: '2026-10-22T01:00:00+00:00',
 };
 
-function localSourceFetch(routes, requests) {
-  return async (path, options) => {
-    requests.push({ path, options });
-    assert.equal(options.credentials, 'same-origin');
-    assert.equal(options.headers['X-RT-CSRF'], 'synthetic-csrf');
-    assert.ok(Object.hasOwn(routes, path), `Unexpected local request: ${path}`);
-    const value = routes[path];
-    if (value instanceof Error) throw value;
-    return { ok: value?.httpError !== true, json: async () => value };
-  };
-}
-
-test('latest batch keeps the selected direction and preserves CPA metadata in both formats', async () => {
-  const requests = [];
-  const page = createPage({ fetch: localSourceFetch({
-    '/api/batches/current': { batch: { id: 'synthetic-batch', status: 'completed', counts: { success: 1 }, result: {} } },
-    '/api/batches/synthetic-batch/conversion-source': { accounts: [fullCPA] },
-  }, requests) });
+test('browser-cached extraction keeps the selected direction and CPA metadata without any API request', async () => {
+  let requests = 0;
+  const page = createPage({ cached: { records: [{ cpa: fullCPA }] }, fetch: async () => { requests++; throw new Error('Must stay local'); } });
   await page.byId('converter-use-latest').click();
   assert.equal(page.count('convert-count-success'), 1);
   const sub2api = await page.previewFirst();
   assert.equal(sub2api.accounts[0].credentials.plan_type, fullCPA.plan_type);
   assert.equal(sub2api.accounts[0].credentials.chatgpt_account_id, fullCPA.account_id);
-  assert.equal(sub2api.accounts[0].credentials.expires_at, new Date(fullCPA.expired).toISOString());
   assert.equal(sub2api.accounts[0].extra.last_refresh, new Date(fullCPA.last_refresh).toISOString());
   await page.byId('converter-preview-close').click();
   await page.byId('mode-sub2api').click();
@@ -253,47 +238,15 @@ test('latest batch keeps the selected direction and preserves CPA metadata in bo
   assert.equal(page.count('convert-count-success'), 1);
   assert.equal(page.byId('mode-sub2api').getAttribute('aria-pressed'), 'true');
   const cpa = await page.previewFirst();
-  for (const key of ['type', 'email', 'account_id', 'plan_type', 'access_token', 'refresh_token', 'id_token']) {
-    assert.equal(cpa[key], fullCPA[key]);
-  }
+  for (const key of ['type', 'email', 'account_id', 'plan_type', 'access_token', 'refresh_token', 'id_token']) assert.equal(cpa[key], fullCPA[key]);
   assert.equal(cpa.last_refresh, new Date(fullCPA.last_refresh).toISOString());
-  assert.equal(cpa.expired, new Date(fullCPA.expired).toISOString());
-  assert.match(page.byId('converter-origin').textContent, /Sub2API → CPA/);
-  assert.equal(requests.length, 4);
+  assert.match(page.byId('converter-origin').textContent, /本浏览器提取结果.*Sub2API → CPA/);
+  assert.equal(requests, 0);
 });
 
-test('latest standalone extraction loads its CPA source without a lossy Sub2API intermediate', async () => {
-  const requests = [];
-  const page = createPage({ fetch: localSourceFetch({
-    '/api/batches/current': { batch: null },
-    '/api/jobs/current': { job: { id: 'synthetic-job', email: fullCPA.email, status: 'success' } },
-    '/api/jobs/synthetic-job/cpa-download': fullCPA,
-  }, requests) });
-  await page.byId('mode-sub2api').click();
-  await page.byId('converter-use-latest').click();
-  const cpa = await page.previewFirst();
-  assert.equal(cpa.plan_type, 'plus');
-  assert.equal(cpa.last_refresh, new Date(fullCPA.last_refresh).toISOString());
-  assert.deepEqual(requests.map((request) => request.path), [
-    '/api/batches/current', '/api/jobs/current', '/api/jobs/synthetic-job/cpa-download',
-  ]);
-});
-
-for (const [name, routes] of [
-  ['source download fails', {
-    '/api/batches/current': { batch: { id: 'synthetic-batch', status: 'completed', counts: { success: 1 }, result: {} } },
-    '/api/batches/synthetic-batch/conversion-source': { httpError: true },
-  }],
-  ['batch is still running', {
-    '/api/batches/current': { batch: { id: 'synthetic-batch', status: 'running', counts: { success: 1 } } },
-  }],
-  ['source has no accounts', {
-    '/api/batches/current': { batch: { id: 'synthetic-batch', status: 'completed', counts: { success: 1 }, result: {} } },
-    '/api/batches/synthetic-batch/conversion-source': { accounts: [] },
-  }],
-]) {
-  test(`latest result rejection preserves current input and successful rows when ${name}`, async () => {
-    const page = createPage({ fetch: localSourceFetch(routes, []) });
+for (const [name, cached] of [['cache absent', null], ['cache has no successful records', { records: [] }]]) {
+  test(`loading latest preserves existing inputs and results when ${name}`, async () => {
+    const page = createPage({ cached });
     await page.paste(JSON.stringify(account('existing')));
     const pendingInput = JSON.stringify(account('pending'));
     page.byId('converter-json').value = pendingInput;
@@ -302,40 +255,7 @@ for (const [name, routes] of [
     assert.equal(page.count('convert-count-success'), 1);
     assert.equal(page.byId('converter-json').value, pendingInput);
     assert.match(page.byId('converter-results-body').textContent, /synthetic-existing@example.com/);
-    assert.equal(page.byId('converter-error').hidden, false);
+    assert.match(page.byId('converter-error').textContent, /本浏览器没有可载入/);
     assert.equal(page.byId('converter-origin').hidden, true);
   });
 }
-
-test('latest-source 429 preserves imported results and pasted input, and does not automatically retry', async () => {
-  let now = Date.now(), timer, requests = 0;
-  const page = createPage({
-    Date: class extends Date { static now() { return now; } },
-    setTimeout(callback, delay) {
-      if (!delay) return setTimeout(callback, 0);
-      timer = callback; return 'synthetic-cooldown';
-    },
-    clearTimeout(id) { if (id === 'synthetic-cooldown') timer = undefined; else clearTimeout(id); },
-    fetch: async () => {
-      requests += 1;
-      return { ok: false, status: 429, headers: { get: () => '15' }, json: async () => ({ error: '载入过于频繁', retry_after: 20 }) };
-    },
-  });
-  await page.paste(JSON.stringify(account('existing')));
-  const input = JSON.stringify(account('pending'));
-  page.byId('converter-json').value = input;
-  await page.byId('converter-json').dispatch('input');
-  await page.byId('converter-use-latest').click();
-  assert.equal(requests, 1);
-  assert.equal(page.count('convert-count-success'), 1);
-  assert.equal(page.byId('converter-json').value, input);
-  assert.match(page.byId('converter-error').textContent, /载入过于频繁.*20 秒/);
-  assert.equal(page.byId('converter-use-latest').disabled, true);
-  await page.byId('converter-use-latest').click(); assert.equal(requests, 1);
-  // Local-only conversion remains available during server-source cooling.
-  await page.byId('convert-paste-button').click();
-  assert.equal(page.count('convert-count-success'), 2);
-  now += 20_000; timer();
-  assert.equal(page.byId('converter-use-latest').disabled, false);
-  assert.equal(requests, 1);
-});

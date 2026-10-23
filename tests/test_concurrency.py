@@ -1,4 +1,5 @@
 """Bounded batch scheduling contracts, with synthetic accounts and explicit gates."""
+
 from __future__ import annotations
 
 import asyncio
@@ -11,6 +12,7 @@ import unittest
 
 from rt_extractor.api import TokenBundle
 from rt_extractor.web import create_app
+from tests.web_client import browser_headers, workspace_for, new_browser
 from rt_extractor.abuse import AbusePolicy, ClientPolicy, Quota
 
 
@@ -74,15 +76,19 @@ class ConcurrentBatchTests(unittest.TestCase):
 
         # This scheduler harness polls every 10 ms and validates eight invalid
         # submissions in one window. Keep limits on with explicit test budgets.
-        self.app = create_app(self.output, extractor=dispatch,
-                              abuse_policy=AbusePolicy(
-                                  burst=Quota(1000, 1), global_burst=Quota(1000, 1),
-                                  device=ClientPolicy(burst=Quota(1000, 1), submissions=Quota(10, 60)),
-                                  session=ClientPolicy(burst=Quota(1000, 1), submissions=Quota(10, 60)),
-                              ))
+        self.app = create_app(
+            self.output,
+            extractor=dispatch,
+            abuse_policy=AbusePolicy(
+                burst=Quota(1000, 1),
+                global_burst=Quota(1000, 1),
+                device=ClientPolicy(burst=Quota(1000, 1), submissions=Quota(10, 60)),
+                session=ClientPolicy(burst=Quota(1000, 1), submissions=Quota(10, 60)),
+            ),
+        )
         self.app.config["TESTING"] = True
         self.client = self.app.test_client()
-        self.headers = {"X-RT-CSRF": self.app.config["RT_CSRF_TOKEN"]}
+        self.headers = browser_headers(self.app, self.client)
 
     def tearDown(self):
         # Release even failed tests before waiting for their worker threads.
@@ -158,9 +164,13 @@ class ConcurrentBatchTests(unittest.TestCase):
                 self.behavior = blocked
                 emails = [f"person{i}@example.com" for i in range(6)]
                 batch_id = self.start(emails, concurrency=setting)
+
                 def at_limit(state):
                     with self.lock:
-                        return state["counts"]["running"] == expected and len(self.calls) == expected
+                        return (
+                            state["counts"]["running"] == expected
+                            and len(self.calls) == expected
+                        )
 
                 running = self.wait(batch_id, at_limit)
                 self.assertEqual(running["concurrency"], expected)
@@ -172,17 +182,41 @@ class ConcurrentBatchTests(unittest.TestCase):
                     self.assertEqual(self.peak, expected)
                 self.assert_redacted(running)
                 release.set()
-                finished = self.wait(batch_id, lambda state: state["status"] == "completed")
+                finished = self.wait(
+                    batch_id, lambda state: state["status"] == "completed"
+                )
                 self.assertEqual(finished["counts"]["success"], len(emails))
                 self.assertEqual(finished["active_jobs"], [])
                 with self.lock:
                     self.assertLessEqual(self.peak, expected)
                     self.assertEqual(self.active, 0)
-                    self.assertEqual(sorted(self.calls), sorted((email, password(email), SECRET) for email in emails))
+                    self.assertEqual(
+                        sorted(self.calls),
+                        sorted((email, password(email), SECRET) for email in emails),
+                    )
+                records = self.client.get(
+                    f"/api/batches/{batch_id}/results", headers=self.headers
+                ).get_json()["records"]
+                response = self.client.post(
+                    f"/api/batches/{batch_id}/ack",
+                    json={
+                        "ids": [record["id"] for record in records],
+                        "complete": True,
+                    },
+                    headers=self.headers,
+                )
+                self.assertEqual(response.status_code, 200)
 
-    def test_free_slot_advances_past_failure_while_slow_account_is_running_and_export_stays_ordered(self):
+    def test_free_slot_advances_past_failure_while_slow_account_is_running_and_export_stays_ordered(
+        self,
+    ):
         release = self.gate()
-        emails = ["slow@example.com", "failed@example.com", "fast@example.com", "last@example.com"]
+        emails = [
+            "slow@example.com",
+            "failed@example.com",
+            "fast@example.com",
+            "last@example.com",
+        ]
 
         async def mixed(email, _password, **_kwargs):
             if email.startswith("slow"):
@@ -193,7 +227,12 @@ class ConcurrentBatchTests(unittest.TestCase):
 
         self.behavior = mixed
         batch_id = self.start(emails, concurrency=2)
-        partial = self.wait(batch_id, lambda state: state["counts"]["success"] == 2 and state["counts"]["error"] == 1)
+        partial = self.wait(
+            batch_id,
+            lambda state: (
+                state["counts"]["success"] == 2 and state["counts"]["error"] == 1
+            ),
+        )
         self.assertFalse(release.is_set())
         self.assertEqual(partial["status"], "running")
         self.assertEqual(partial["counts"]["queued"], 0)
@@ -204,21 +243,41 @@ class ConcurrentBatchTests(unittest.TestCase):
         finished = self.wait(batch_id, lambda state: state["status"] == "completed")
         successful = [emails[0], emails[2], emails[3]]
         self.assertEqual(finished["counts"]["success"], 3)
-        response = self.client.get(f"/api/batches/{batch_id}/sub2api-download", headers=self.headers)
+        response = self.client.get(
+            f"/api/batches/{batch_id}/results", headers=self.headers
+        )
         self.assertEqual(response.status_code, 200)
-        document = json.loads(response.get_data())
+        document = {
+            "accounts": [
+                record["sub2api"]["accounts"][0]
+                for record in response.get_json()["records"]
+            ]
+        }
         response.close()
-        self.assertEqual([account["credentials"]["email"] for account in document["accounts"]], successful)
+        self.assertEqual(
+            [account["credentials"]["email"] for account in document["accounts"]],
+            successful,
+        )
         for account in document["accounts"]:
             source = bundle(account["credentials"]["email"])
-            for field in ("access_token", "refresh_token", "id_token", "chatgpt_account_id"):
+            for field in (
+                "access_token",
+                "refresh_token",
+                "id_token",
+                "chatgpt_account_id",
+            ):
                 self.assertEqual(account["credentials"][field], getattr(source, field))
         for row in finished["rows"]:
-            response = self.client.get(f"/api/jobs/{row['id']}/rt", headers=self.headers)
+            response = self.client.get(
+                f"/api/jobs/{row['id']}/result", headers=self.headers
+            )
             if row["status"] == "success":
-                self.assertEqual(response.get_json(), {"refresh_token": bundle(row["email"]).refresh_token})
+                self.assertEqual(
+                    response.get_json()["records"][0]["raw"]["refresh_token"],
+                    bundle(row["email"]).refresh_token,
+                )
             else:
-                self.assertEqual(response.status_code, 409)
+                self.assertEqual(response.get_json()["records"], [])
 
     def test_two_challenges_are_isolated_and_another_slot_keeps_processing(self):
         third_release = self.gate()
@@ -280,7 +339,12 @@ class ConcurrentBatchTests(unittest.TestCase):
     def test_cancel_stops_all_active_and_pending_accounts_and_waits_for_cleanup(self):
         cleanup_release = self.gate()
         cleaning = set()
-        emails = ["saved@example.com", "busy1@example.com", "busy2@example.com", "queued@example.com"]
+        emails = [
+            "saved@example.com",
+            "busy1@example.com",
+            "busy2@example.com",
+            "queued@example.com",
+        ]
 
         async def cancellable(email, _password, **_kwargs):
             if email == emails[0]:
@@ -295,8 +359,15 @@ class ConcurrentBatchTests(unittest.TestCase):
 
         self.behavior = cancellable
         batch_id = self.start(emails, concurrency=2)
-        before = self.wait(batch_id, lambda state: state["counts"]["success"] == 1 and state["counts"]["running"] == 2)
-        response = self.client.post(f"/api/batches/{batch_id}/cancel", json={}, headers=self.headers)
+        before = self.wait(
+            batch_id,
+            lambda state: (
+                state["counts"]["success"] == 1 and state["counts"]["running"] == 2
+            ),
+        )
+        response = self.client.post(
+            f"/api/batches/{batch_id}/cancel", json={}, headers=self.headers
+        )
         self.assertEqual(response.status_code, 200)
         self.assertEqual(response.get_json()["status"], "cancelling")
         deadline = time.monotonic() + 3
@@ -307,17 +378,39 @@ class ConcurrentBatchTests(unittest.TestCase):
             time.sleep(0.005)
         self.assertEqual(cleaning, set(emails[1:3]))
         # A second cancellation must not interrupt the first cancellation's cleanup.
-        again = self.client.post(f"/api/batches/{batch_id}/cancel", json={}, headers=self.headers)
+        again = self.client.post(
+            f"/api/batches/{batch_id}/cancel", json={}, headers=self.headers
+        )
         self.assertEqual(again.get_json()["status"], "cancelling")
-        current = self.client.get(f"/api/batches/{batch_id}", headers=self.headers).get_json()
+        current = self.client.get(
+            f"/api/batches/{batch_id}", headers=self.headers
+        ).get_json()
         self.assertEqual(current["status"], "cancelling")
-        denied = self.client.post("/api/batches", json={"accounts_text": account_line("later@example.com")}, headers=self.headers)
+        denied = self.client.post(
+            "/api/batches",
+            json={"accounts_text": account_line("later@example.com")},
+            headers=self.headers,
+        )
         self.assertEqual(denied.status_code, 409)
-        denied = self.client.post("/api/jobs", json={"email": "later@example.com", "password": "synthetic"}, headers=self.headers)
+        denied = self.client.post(
+            "/api/jobs",
+            json={"email": "later@example.com", "password": "synthetic"},
+            headers=self.headers,
+        )
         self.assertEqual(denied.status_code, 409)
-        self.assertEqual(self.client.get(f"/api/batches/{batch_id}/sub2api-download", headers=self.headers).status_code, 409)
+        self.assertEqual(
+            self.client.get(
+                f"/api/batches/{batch_id}/results", headers=self.headers
+            ).status_code,
+            200,
+        )
         saved_row = before["rows"][0]
-        self.assertEqual(self.client.get(f"/api/jobs/{saved_row['id']}/rt", headers=self.headers).get_json(), {"refresh_token": bundle(emails[0]).refresh_token})
+        self.assertEqual(
+            self.client.get(
+                f"/api/jobs/{saved_row['id']}/result", headers=self.headers
+            ).get_json()["records"][0]["raw"]["refresh_token"],
+            bundle(emails[0]).refresh_token,
+        )
         cleanup_release.set()
         finished = self.wait(batch_id, lambda state: state["status"] == "cancelled")
         self.assertEqual(finished["counts"]["success"], 1)
@@ -329,9 +422,20 @@ class ConcurrentBatchTests(unittest.TestCase):
         with self.lock:
             self.assertEqual({call[0] for call in self.calls}, set(emails[:3]))
             self.assertEqual(self.active, 0)
-        response = self.client.get(f"/api/batches/{batch_id}/sub2api-download", headers=self.headers)
+        response = self.client.get(
+            f"/api/batches/{batch_id}/results", headers=self.headers
+        )
         self.assertEqual(response.status_code, 200)
-        self.assertEqual([account["credentials"]["email"] for account in response.get_json()["accounts"]], [emails[0]])
+        self.assertEqual(
+            [
+                account["credentials"]["email"]
+                for account in [
+                    record["sub2api"]["accounts"][0]
+                    for record in response.get_json()["records"]
+                ]
+            ],
+            [emails[0]],
+        )
         response.close()
 
     def test_cancel_waits_for_an_already_running_executor_before_releasing_batch(self):
@@ -360,32 +464,34 @@ class ConcurrentBatchTests(unittest.TestCase):
         self.assertEqual(finished["counts"]["cancelled"], 2)
         self.assertEqual([call[0] for call in self.calls], ["vm@example.com"])
 
-    def test_completed_concurrency_and_account_results_survive_restart(self):
+    def test_completed_concurrency_and_account_results_are_never_recovered_on_restart(
+        self,
+    ):
         emails = ["first@example.com", "second@example.com", "third@example.com"]
         batch_id = self.start(emails, concurrency=3)
         finished = self.wait(batch_id, lambda state: state["status"] == "completed")
+        self.assertEqual(finished["counts"]["success"], 3)
 
         async def forbidden(**_kwargs):
-            raise AssertionError("Restoring completed metadata must not authenticate")
+            raise AssertionError("Recovery must not authenticate")
 
         restarted = create_app(self.output, extractor=forbidden)
-        client = restarted.test_client()
-        headers = {"X-RT-CSRF": restarted.config["RT_CSRF_TOKEN"]}
-        recovered = client.get("/api/batches/current", headers=headers).get_json()["batch"]
-        self.assertEqual(recovered["id"], batch_id)
-        self.assertEqual(recovered["status"], "completed")
-        self.assertEqual(recovered["concurrency"], 3)
-        self.assertEqual(recovered["active_jobs"], [])
-        self.assertEqual(recovered["counts"], finished["counts"])
-        self.assertEqual([row["email"] for row in recovered["rows"]], emails)
-        self.assert_redacted(recovered)
-        for row in recovered["rows"]:
-            response = client.get(f"/api/jobs/{row['id']}/rt", headers=headers)
-            self.assertEqual(response.get_json(), {"refresh_token": bundle(row["email"]).refresh_token})
-        response = client.get(f"/api/batches/{batch_id}/sub2api-download", headers=headers)
-        self.assertEqual(response.status_code, 200)
-        self.assertEqual([account["credentials"]["email"] for account in response.get_json()["accounts"]], emails)
-        response.close()
+        client, headers = new_browser(restarted)
+        self.assertIsNone(
+            client.get("/api/batches/current", headers=headers).get_json()["batch"]
+        )
+        self.assertEqual(
+            client.get(f"/api/batches/{batch_id}/results", headers=headers).status_code,
+            404,
+        )
+        for row in finished["rows"]:
+            self.assertEqual(
+                client.get(
+                    f"/api/jobs/{row['id']}/result", headers=headers
+                ).status_code,
+                404,
+            )
+        self.assertEqual(list(self.output.iterdir()), [])
 
     def test_rate_limit_pauses_new_dispatch_but_other_account_can_continue(self):
         from rt_extractor._protocol.login import RateLimitedError
@@ -443,7 +549,9 @@ class ConcurrentBatchTests(unittest.TestCase):
         self.assertEqual(finished["active_jobs"], [])
         self.assertEqual([call[0] for call in self.calls], [emails[0]])
 
-    def test_rate_limit_is_published_before_the_limited_worker_returns_to_dispatch(self):
+    def test_rate_limit_is_published_before_the_limited_worker_returns_to_dispatch(
+        self,
+    ):
         from rt_extractor._protocol.login import RateLimitedError
 
         trigger_limit = self.gate()
@@ -451,7 +559,7 @@ class ConcurrentBatchTests(unittest.TestCase):
         limited_consume_release = self.gate()
         limited_returned = threading.Event()
         emails = ["limited@example.com", "running@example.com", "queued@example.com"]
-        jobs = self.app.extensions["rt_jobs"]
+        jobs = workspace_for(self.app, self.client).jobs
         original_run = jobs._run
 
         def delayed_return(job, credentials, **kwargs):
@@ -478,18 +586,24 @@ class ConcurrentBatchTests(unittest.TestCase):
         self.wait(batch_id, lambda state: state["counts"]["running"] == 2)
         trigger_limit.set()
         self.assertTrue(limited_returned.wait(3))
-        paused = self.client.get(f"/api/batches/{batch_id}", headers=self.headers).get_json()
+        paused = self.client.get(
+            f"/api/batches/{batch_id}", headers=self.headers
+        ).get_json()
         self.assertGreater(paused["cooldown_seconds"], 0)
         self.assertEqual(paused["counts"]["queued"], 1)
         running_release.set()
-        other_finished = self.wait(batch_id, lambda state: state["rows"][1]["status"] == "success")
+        other_finished = self.wait(
+            batch_id, lambda state: state["rows"][1]["status"] == "success"
+        )
         self.assertFalse(limited_consume_release.is_set())
         self.assertGreater(other_finished["cooldown_seconds"], 0)
         self.assertEqual(other_finished["counts"]["success"], 1)
         self.assertEqual(other_finished["rows"][2]["status"], "queued")
         with self.lock:
             self.assertEqual({call[0] for call in self.calls}, set(emails[:2]))
-        self.client.post(f"/api/batches/{batch_id}/cancel", json={}, headers=self.headers)
+        self.client.post(
+            f"/api/batches/{batch_id}/cancel", json={}, headers=self.headers
+        )
         limited_consume_release.set()
         finished = self.wait(batch_id, lambda state: state["status"] == "cancelled")
         self.assertEqual(finished["counts"]["error"], 1)

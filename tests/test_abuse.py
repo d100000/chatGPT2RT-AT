@@ -1,4 +1,5 @@
 """Offline abuse-control contracts; credentials and network clients are synthetic."""
+
 from __future__ import annotations
 
 from concurrent.futures import ThreadPoolExecutor
@@ -12,9 +13,15 @@ from unittest.mock import patch
 from flask import Response
 
 from rt_extractor.abuse import (
-    AbuseGuard, AbuseLimited, AbusePolicy, LeasedIterator, Quota, WindowLimiter,
+    AbuseGuard,
+    AbuseLimited,
+    AbusePolicy,
+    LeasedIterator,
+    Quota,
+    WindowLimiter,
 )
 from rt_extractor.web import create_app
+from tests.web_client import browser_headers, workspace_for
 from rt_extractor.web_jobs import Job
 
 
@@ -176,10 +183,20 @@ class WebAbuseTests(unittest.TestCase):
         async def forbidden(*_args, **_kwargs):
             raise AssertionError("A security test must not start real extraction")
 
-        app = create_app(self.output, extractor=forbidden,
-                         abuse_policy=policy(**changes), abuse_clock=self.clock)
+        app = create_app(
+            self.output,
+            extractor=forbidden,
+            abuse_policy=policy(**changes),
+            abuse_clock=self.clock,
+        )
         app.config["TESTING"] = True
-        return app, app.test_client(), {"X-RT-CSRF": app.config["RT_CSRF_TOKEN"]}
+        client = app.test_client()
+        headers = browser_headers(app, client)
+        app._fixture_client = client
+        # Bootstrapping is a real request. Start each narrow quota test after
+        # that window, while keeping the signed browser identity intact.
+        self.clock.advance(3601)
+        return app, client, headers
 
     def assert_limited(self, response, retry=None):
         self.assertEqual(response.status_code, 429, response.get_data(as_text=True))
@@ -187,7 +204,7 @@ class WebAbuseTests(unittest.TestCase):
         self.assertIsInstance(body["retry_after"], int)
         self.assertGreaterEqual(body["retry_after"], 1)
         self.assertEqual(response.headers["Retry-After"], str(body["retry_after"]))
-        self.assertEqual(response.headers["Cache-Control"], "no-store")
+        self.assertTrue(response.cache_control.no_store)
         if retry is not None:
             self.assertEqual(body["retry_after"], retry)
         for value in ("synthetic-password", "JBSWY3DPEHPK3PXP", "person@example.com"):
@@ -203,13 +220,23 @@ class WebAbuseTests(unittest.TestCase):
 
     def terminal_job(self, app, status="success", size=0):
         job_id = "a" * 32
-        output = self.output / "tokens-synthetic.json"
-        payload = {"access_token": "synthetic-at", "refresh_token": "synthetic-rt",
-                   "id_token": "synthetic-id", "email": "person@example.com", "padding": "x" * size}
-        output.write_text(json.dumps(payload))
-        job = Job(id=job_id, email="person@example.com", status=status,
-                  result={"path": str(output), "filename": output.name})
-        app.extensions["rt_jobs"].jobs[job_id] = job
+        raw = {
+            "access_token": "synthetic-at",
+            "refresh_token": "synthetic-rt",
+            "id_token": "synthetic-id",
+            "email": "person@example.com",
+            "padding": "x" * size,
+        }
+        job = Job(
+            id=job_id,
+            email="person@example.com",
+            status=status,
+            result={"filename": f"tokens-{job_id}.json"},
+            payload={"raw": raw, "cpa": {}, "sub2api": {}}
+            if status == "success"
+            else None,
+        )
+        workspace_for(app, app._fixture_client).jobs.jobs[job_id] = job
         return job
 
     def test_request_limit_ignores_spoofed_forwarding_headers_and_recovers(self):
@@ -279,35 +306,84 @@ class WebAbuseTests(unittest.TestCase):
         self.assert_limited(client.get("/api/jobs/current"), 300)
         self.assertEqual(client.get("/api/jobs/current", headers=headers).status_code, 200)
 
-    def test_account_budget_blocks_changed_case_and_mixed_batch_without_partial_charges(self):
+    def test_account_budget_blocks_changed_case_and_mixed_batch_without_partial_charges(
+        self,
+    ):
         app, client, headers = self.app(account_attempts=Quota(1, 900))
-        manager = app.extensions["rt_jobs"]
-        batches = app.extensions["rt_batches"]
-        with patch.object(manager, "start", return_value={"id": "synthetic"}) as start, \
-                patch.object(batches, "start", return_value={"id": "synthetic-batch"}) as batch_start:
-            self.assertEqual(client.post("/api/jobs", json=self.credentials("Person@Example.com"), headers=headers).status_code, 202)
-            self.assert_limited(client.post("/api/batches", json=self.batch("PERSON@example.com", "other@example.com"), headers=headers), 900)
-            self.assertEqual(client.post("/api/jobs", json=self.credentials("other@example.com"), headers=headers).status_code, 202)
+        manager = workspace_for(app, client).jobs
+        batches = workspace_for(app, client).batches
+        with (
+            patch.object(
+                type(manager), "start", return_value={"id": "synthetic"}
+            ) as start,
+            patch.object(
+                type(batches), "start", return_value={"id": "synthetic-batch"}
+            ) as batch_start,
+        ):
+            self.assertEqual(
+                client.post(
+                    "/api/jobs",
+                    json=self.credentials("Person@Example.com"),
+                    headers=headers,
+                ).status_code,
+                202,
+            )
+            self.assert_limited(
+                client.post(
+                    "/api/batches",
+                    json=self.batch("PERSON@example.com", "other@example.com"),
+                    headers=headers,
+                ),
+                900,
+            )
+            self.assertEqual(
+                client.post(
+                    "/api/jobs",
+                    json=self.credentials("other@example.com"),
+                    headers=headers,
+                ).status_code,
+                202,
+            )
             self.assertEqual(start.call_count, 2)
             batch_start.assert_not_called()
 
     def test_active_conflict_does_not_spend_account_budget(self):
         app, client, headers = self.app(account_attempts=Quota(1, 900))
-        manager = app.extensions["rt_jobs"]
+        manager = workspace_for(app, client).jobs
         active = self.terminal_job(app, status="running")
-        self.assertEqual(client.post("/api/jobs", json=self.credentials(), headers=headers).status_code, 409)
+        self.assertEqual(
+            client.post(
+                "/api/jobs", json=self.credentials(), headers=headers
+            ).status_code,
+            409,
+        )
         manager.jobs.pop(active.id)
-        with patch.object(manager, "start", return_value={"id": "synthetic"}):
-            self.assertEqual(client.post("/api/jobs", json=self.credentials(), headers=headers).status_code, 202)
+        with patch.object(type(manager), "start", return_value={"id": "synthetic"}):
+            self.assertEqual(
+                client.post(
+                    "/api/jobs", json=self.credentials(), headers=headers
+                ).status_code,
+                202,
+            )
 
     def test_failed_batch_start_refunds_the_whole_account_reservation(self):
         app, client, headers = self.app(account_attempts=Quota(1, 900))
-        batches = app.extensions["rt_batches"]
+        batches = workspace_for(app, client).batches
         payload = self.batch("person@example.com", "other@example.com")
-        with patch.object(batches, "start", side_effect=OSError("synthetic failure")):
-            self.assertEqual(client.post("/api/batches", json=payload, headers=headers).status_code, 500)
-        with patch.object(batches, "start", return_value={"id": "synthetic-batch"}):
-            self.assertEqual(client.post("/api/batches", json=payload, headers=headers).status_code, 202)
+        with patch.object(
+            type(batches), "start", side_effect=OSError("synthetic failure")
+        ):
+            self.assertEqual(
+                client.post("/api/batches", json=payload, headers=headers).status_code,
+                500,
+            )
+        with patch.object(
+            type(batches), "start", return_value={"id": "synthetic-batch"}
+        ):
+            self.assertEqual(
+                client.post("/api/batches", json=payload, headers=headers).status_code,
+                202,
+            )
 
     def test_random_job_ids_do_not_bypass_the_shared_verification_budget(self):
         app, client, headers = self.app(verification=Quota(2, 60))
@@ -326,11 +402,19 @@ class WebAbuseTests(unittest.TestCase):
         self.assert_limited(client.post(path, json={"code": "654321", "challenge_id": "different"}, headers=headers))
 
     def test_every_result_endpoint_uses_the_same_export_budget(self):
-        paths = ["/api/jobs/missing/download", "/api/jobs/missing/rt",
-                 "/api/jobs/missing/cpa-download", "/api/jobs/missing/sub2api-download",
-                 "/api/batches/missing/download", "/api/batches/missing/rt-download",
-                 "/api/batches/missing/cpa-download", "/api/batches/missing/sub2api-download",
-                 "/api/batches/missing/conversion-source"]
+        paths = [
+            "/api/jobs/missing/result",
+            "/api/batches/missing/results",
+            "/api/jobs/missing/download",
+            "/api/jobs/missing/rt",
+            "/api/jobs/missing/cpa-download",
+            "/api/jobs/missing/sub2api-download",
+            "/api/batches/missing/download",
+            "/api/batches/missing/rt-download",
+            "/api/batches/missing/cpa-download",
+            "/api/batches/missing/sub2api-download",
+            "/api/batches/missing/conversion-source",
+        ]
         for first_path in paths:
             with self.subTest(path=first_path):
                 app, client, headers = self.app(exports=Quota(1, 60))
@@ -342,7 +426,7 @@ class WebAbuseTests(unittest.TestCase):
     def test_download_concurrency_releases_on_disconnect_exhaustion_and_head(self):
         app, client, headers = self.app(export_concurrency=1)
         job = self.terminal_job(app, size=100_000)
-        path = f"/api/jobs/{job.id}/download"
+        path = f"/api/jobs/{job.id}/result"
         held = client.get(path, headers=headers, buffered=False)
         self.assertEqual(held.status_code, 200)
         self.assert_limited(client.get(path, headers=headers))
@@ -357,25 +441,35 @@ class WebAbuseTests(unittest.TestCase):
         self.assertEqual(app.extensions["rt_abuse"]._exports, 0)
         head.close()
 
-    def test_export_view_exception_and_stream_exception_release_concurrency(self):
+    def test_handoff_view_exception_and_stream_exception_release_concurrency(self):
         app, client, headers = self.app(export_concurrency=1)
         job = self.terminal_job(app)
         guard = app.extensions["rt_abuse"]
-        with patch("rt_extractor.web.build_cpa_record", side_effect=RuntimeError("synthetic failure")):
-            with self.assertRaises(RuntimeError):
-                client.get(f"/api/jobs/{job.id}/cpa-download", headers=headers)
+        path = f"/api/jobs/{job.id}/result"
+        endpoint = app.url_map.bind("localhost").match(path)[0]
+        original = app.view_functions[endpoint]
+
+        def failure(**_kwargs):
+            raise RuntimeError("synthetic view failure")
+
+        app.view_functions[endpoint] = failure
+        with self.assertRaises(RuntimeError):
+            client.get(path, headers=headers)
         self.assertEqual(guard._exports, 0)
 
         def broken():
             yield b"first"
             raise RuntimeError("synthetic body failure")
 
-        with patch("rt_extractor.web.send_file", return_value=Response(broken(), direct_passthrough=True)):
-            response = client.get(f"/api/jobs/{job.id}/download", headers=headers, buffered=False)
-            with self.assertRaises(RuntimeError):
-                response.get_data()
-            response.close()
+        app.view_functions[endpoint] = lambda **kwargs: Response(
+            broken(), direct_passthrough=True
+        )
+        response = client.get(path, headers=headers, buffered=False)
+        with self.assertRaises(RuntimeError):
+            response.get_data()
+        response.close()
         self.assertEqual(guard._exports, 0)
+        app.view_functions[endpoint] = original
 
     def test_small_write_endpoints_reject_oversized_bodies_before_processing(self):
         app, client, headers = self.app()
@@ -389,8 +483,12 @@ class WebAbuseTests(unittest.TestCase):
 
     def test_malformed_unicode_email_is_rejected_without_starting_a_job(self):
         app, client, headers = self.app()
-        with patch.object(app.extensions["rt_jobs"], "start") as start:
-            response = client.post("/api/jobs", json=self.credentials("\ud800@example.com"), headers=headers)
+        with patch.object(workspace_for(app, client).jobs, "start") as start:
+            response = client.post(
+                "/api/jobs",
+                json=self.credentials("\ud800@example.com"),
+                headers=headers,
+            )
             self.assertEqual(response.status_code, 400)
             start.assert_not_called()
 

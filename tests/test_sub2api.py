@@ -1,9 +1,8 @@
-"""Sub2API schema and download contracts using synthetic account data only."""
+"""Sub2API schema and browser handoff contracts using synthetic account data only."""
 
 from __future__ import annotations
 
 import json
-import os
 from pathlib import Path
 import tempfile
 import time
@@ -12,6 +11,7 @@ import unittest
 from rt_extractor.api import TokenBundle
 from rt_extractor.sub2api import build_sub2api_export
 from rt_extractor.web import create_app
+from tests.web_client import browser_headers, new_browser
 
 
 PASSWORD = "synthetic-sub2api-password"
@@ -97,7 +97,7 @@ class Sub2APISchemaTests(unittest.TestCase):
             build_sub2api_export([])
 
 
-class Sub2APIDownloadTests(unittest.TestCase):
+class Sub2APIHandoffTests(unittest.TestCase):
     def setUp(self):
         self.directory = tempfile.TemporaryDirectory()
         self.output = Path(self.directory.name)
@@ -116,7 +116,7 @@ class Sub2APIDownloadTests(unittest.TestCase):
         self.app = create_app(self.output, extractor=dispatch)
         self.app.config["TESTING"] = True
         self.client = self.app.test_client()
-        self.headers = {"X-RT-CSRF": self.app.config["RT_CSRF_TOKEN"]}
+        self.headers = browser_headers(self.app, self.client)
 
     def tearDown(self):
         for batch_id in self.batch_ids:
@@ -147,125 +147,79 @@ class Sub2APIDownloadTests(unittest.TestCase):
 
     def download(self, batch_id, *, client=None, headers=None):
         response = (client or self.client).get(
-            f"/api/batches/{batch_id}/sub2api-download", headers=headers or self.headers,
+            f"/api/batches/{batch_id}/results", headers=headers or self.headers
         )
         self.assertEqual(response.status_code, 200)
-        self.assertEqual(response.mimetype, "application/json")
-        self.assertIn(f"sub2api-{batch_id}.json", response.headers["Content-Disposition"])
-        self.assertEqual(response.headers["Cache-Control"], "no-store")
-        document = json.loads(response.get_data())
-        response.close()
-        return document
+        self.assertTrue(response.cache_control.no_store)
+        records = response.get_json()["records"]
+        return {"accounts": [r["sub2api"]["accounts"][0] for r in records]}
 
-    def test_partial_success_export_preserves_input_order_and_exact_account_mapping(self):
+    def test_partial_success_export_preserves_input_order_and_exact_account_mapping(
+        self,
+    ):
         async def mixed(email, **_kwargs):
             if email.startswith("failed"):
                 raise RuntimeError(f"should be hidden: {PASSWORD} {SECRET}")
             return bundle(email)
 
         self.extract = mixed
-        batch_id = self.start("first@example.com", "failed@example.com", "last@example.com")
+        batch_id = self.start(
+            "first@example.com", "failed@example.com", "last@example.com"
+        )
         snapshot = self.wait(batch_id, {"completed"})
-        self.assertEqual(snapshot["result"]["sub2api_url"], f"/api/batches/{batch_id}/sub2api-download")
+        self.assertNotIn("sub2api_url", snapshot["result"])
         self.assertEqual(snapshot["counts"]["success"], 2)
         document = self.download(batch_id)
-        self.assertEqual(document["accounts"], [expected_account("first@example.com"), expected_account("last@example.com")])
+        self.assertEqual(
+            document["accounts"],
+            [
+                expected_account("first@example.com"),
+                expected_account("last@example.com"),
+            ],
+        )
         for secret in (PASSWORD, SECRET, "failed@example.com"):
             self.assertNotIn(secret, json.dumps(document))
         self.assertNotIn("synthetic-at-", json.dumps(snapshot))
 
-    def test_download_requires_csrf_and_a_finished_batch_with_successes(self):
-        async def awaiting(email, **kwargs):
-            await kwargs["otp_fetcher"](email)
-            return bundle(email)
-
-        self.extract = awaiting
-        batch_id = self.start("waiting@example.com")
-        self.wait(batch_id, {"awaiting_code"})
-        endpoint = f"/api/batches/{batch_id}/sub2api-download"
-        self.assertEqual(self.client.get(endpoint).status_code, 403)
-        self.assertEqual(self.client.get(endpoint, headers=self.headers).status_code, 409)
-        self.assertEqual(self.client.get("/api/batches/missing/sub2api-download", headers=self.headers).status_code, 404)
-        self.client.post(f"/api/batches/{batch_id}/cancel", json={}, headers=self.headers)
-        self.wait(batch_id, {"cancelled"})
-        self.assertEqual(self.client.get(endpoint, headers=self.headers).status_code, 409)
-
-    def test_completed_batch_and_download_survive_restart_without_logging_in_again(self):
-        batch_id = self.start("first@example.com", "second@example.com")
-        finished = self.wait(batch_id, {"completed"})
-        expected = self.download(batch_id)
-        state_file = self.output / f"batch-{batch_id}" / "batch-state.json"
-        self.assertTrue(state_file.is_file())
-        state_text = state_file.read_text(encoding="utf-8")
-        for secret in (PASSWORD, SECRET, "synthetic-at-", "synthetic-rt-", "synthetic-id-"):
-            self.assertNotIn(secret, state_text)
-        if os.name == "posix":
-            self.assertEqual(state_file.stat().st_mode & 0o777, 0o600)
-        # A stored public snapshot must never control the file or URL served.
-        saved = json.loads(state_text)
-        for row in saved["rows"]:
-            row["result"]["path"] = "/tmp/not-this-batch.json"
-            row["result"]["filename"] = "../../not-this-batch.json"
-            row["result"]["download_url"] = "https://invalid.example/token"
-        state_file.write_text(json.dumps(saved), encoding="utf-8")
-
-        async def forbidden(**_kwargs):
-            self.fail("Restoring completed results must not authenticate accounts again")
-
-        restarted = create_app(self.output, extractor=forbidden)
-        client = restarted.test_client()
-        headers = {"X-RT-CSRF": restarted.config["RT_CSRF_TOKEN"]}
-        current = client.get("/api/batches/current", headers=headers).get_json()["batch"]
-        self.assertEqual(current["id"], batch_id)
-        self.assertEqual(current["status"], "completed")
-        self.assertEqual(current["counts"], finished["counts"])
-        self.assertEqual(self.download(batch_id, client=client, headers=headers)["accounts"], expected["accounts"])
-        for row in current["rows"]:
-            self.assertEqual(Path(row["result"]["path"]).resolve(), (state_file.parent / f"tokens-{row['id']}.json").resolve())
-            self.assertEqual(row["result"]["download_url"], f"/api/jobs/{row['id']}/download")
-            response = client.get(row["result"]["download_url"], headers=headers)
-            self.assertEqual(response.status_code, 200)
-            self.assertEqual(json.loads(response.get_data()), bundle(row["email"]).to_dict())
-            response.close()
-
-    def test_cancelled_batch_can_export_previously_completed_accounts_after_restart(self):
-        async def partial(email, **kwargs):
-            if email.startswith("waiting"):
-                await kwargs["otp_fetcher"](email)
-            return bundle(email)
-
-        self.extract = partial
-        batch_id = self.start("first@example.com", "waiting@example.com", "last@example.com")
-        self.wait(batch_id, {"awaiting_code"})
-        self.client.post(f"/api/batches/{batch_id}/cancel", json={}, headers=self.headers)
-        finished = self.wait(batch_id, {"cancelled"})
-        self.assertEqual(finished["counts"]["success"], 1)
-        restarted = create_app(self.output, extractor=self.extract)
-        client = restarted.test_client()
-        headers = {"X-RT-CSRF": restarted.config["RT_CSRF_TOKEN"]}
-        self.assertEqual(self.download(batch_id, client=client, headers=headers)["accounts"], [expected_account("first@example.com")])
-
-    def test_corrupt_or_nonterminal_saved_batches_are_ignored_without_resuming(self):
+    def test_handoff_requires_session_csrf_and_same_origin(self):
         batch_id = self.start("first@example.com")
-        finished = self.wait(batch_id, {"completed"})
-        state_file = self.output / f"batch-{batch_id}" / "batch-state.json"
-        active_row = json.loads(json.dumps(finished))
-        active_row["rows"][0]["status"] = "running"
-        malformed_states = [
-            "{not-json", json.dumps([]),
-            json.dumps({**finished, "status": "running"}), json.dumps(active_row),
-        ]
-        for malformed in malformed_states:
-            with self.subTest(malformed=malformed[:30]):
-                state_file.write_text(malformed, encoding="utf-8")
-                restarted = create_app(self.output, extractor=self.extract)
-                client = restarted.test_client()
-                headers = {"X-RT-CSRF": restarted.config["RT_CSRF_TOKEN"]}
-                response = client.get("/api/batches/current", headers=headers)
-                self.assertEqual(response.status_code, 200)
-                self.assertIsNone(response.get_json()["batch"])
-                self.assertFalse(restarted.extensions["rt_jobs"].active_batch)
-        self.assertEqual(self.calls, ["first@example.com"])
+        self.wait(batch_id, {"completed"})
+        path = f"/api/batches/{batch_id}/results"
+        for headers in (
+            {},
+            {"X-RT-CSRF": "wrong"},
+            {**self.headers, "Origin": "https://invalid.example"},
+        ):
+            self.assertEqual(self.client.get(path, headers=headers).status_code, 403)
+        self.assertEqual(
+            self.client.get(
+                f"/api/batches/{batch_id}/sub2api-download", headers=self.headers
+            ).status_code,
+            410,
+        )
+
+    def test_completed_batch_cannot_be_restored_into_another_browser_or_process(self):
+        batch_id = self.start("first@example.com", "second@example.com")
+        self.wait(batch_id, {"completed"})
+        self.assertEqual(
+            self.download(batch_id)["accounts"],
+            [
+                expected_account("first@example.com"),
+                expected_account("second@example.com"),
+            ],
+        )
+        for app in (self.app, create_app(self.output, extractor=self.extract)):
+            client, headers = new_browser(app)
+            self.assertIsNone(
+                client.get("/api/batches/current", headers=headers).get_json()["batch"]
+            )
+            self.assertEqual(
+                client.get(
+                    f"/api/batches/{batch_id}/results", headers=headers
+                ).status_code,
+                404,
+            )
+        self.assertEqual(list(self.output.iterdir()), [])
 
 
 if __name__ == "__main__":

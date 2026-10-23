@@ -5,9 +5,7 @@ from __future__ import annotations
 import asyncio
 from dataclasses import replace
 import json
-import os
 from pathlib import Path
-import re
 import tempfile
 import threading
 import time
@@ -16,6 +14,7 @@ import unittest
 from rt_extractor.api import TokenBundle
 from rt_extractor.abuse import AbusePolicy, Quota
 from rt_extractor.web import create_app
+from tests.web_client import browser_headers
 
 
 EMAIL = "synthetic@example.com"
@@ -54,12 +53,16 @@ class WebTests(unittest.TestCase):
         # Input validation sends seven invalid requests in one window. Layered
         # rate-limit enforcement is covered separately in test_browser_limits.
         defaults = AbusePolicy()
-        self.app = create_app(output_dir=self.output_dir, extractor=dispatch,
-                              abuse_policy=replace(defaults, session=replace(
-                                  defaults.session, submissions=Quota(10, 60))))
+        self.app = create_app(
+            output_dir=self.output_dir,
+            extractor=dispatch,
+            abuse_policy=replace(
+                defaults, session=replace(defaults.session, submissions=Quota(10, 60))
+            ),
+        )
         self.app.config.update(TESTING=True)
         self.client = self.app.test_client()
-        self.headers = {"X-RT-CSRF": self.app.config["RT_CSRF_TOKEN"]}
+        self.headers = browser_headers(self.app, self.client)
 
     def tearDown(self):
         current_response = self.client.get("/api/jobs/current", headers=self.headers)
@@ -103,7 +106,9 @@ class WebTests(unittest.TestCase):
         self.assertEqual(page.status_code, 200)
         html = page.get_data(as_text=True)
         self.assertRegex(html, r'<meta[^>]+name=["\']rt-csrf["\']')
-        self.assertIn(self.app.config["RT_CSRF_TOKEN"], html)
+        self.assertIn(self.headers["X-RT-CSRF"], html)
+        self.assertNotIn(self.app.config["RT_CSRF_TOKEN"], html)
+        self.assertIn(self.client._rt_owner, html)
         response = self.client.get("/api/jobs/current", headers=self.headers)
         self.assertEqual(response.status_code, 200)
         self.assertIsNone(response.get_json()["job"])
@@ -128,24 +133,28 @@ class WebTests(unittest.TestCase):
         response = self.client.get("/", environ_overrides={"REMOTE_ADDR": "203.0.113.20"})
         self.assertEqual(response.status_code, 403)
 
-    def test_complete_result_download_and_private_file(self):
+    def test_complete_result_handoff_stays_in_memory_until_browser_ack(self):
         job = self.start()
         done = self.wait_for(job["id"], {"success", "error"})
         self.assertEqual(done["status"], "success")
         self.assert_public_safe(done)
-        current = self.client.get("/api/jobs/current", headers=self.headers).get_json()["job"]
-        self.assertEqual(current["id"], job["id"])
-        self.assert_public_safe(current)
-        downloaded = self.client.get(f"/api/jobs/{job['id']}/download", headers=self.headers)
-        self.assertEqual(downloaded.status_code, 200)
-        self.assertIn("attachment", downloaded.headers.get("Content-Disposition", ""))
-        self.assertEqual(json.loads(downloaded.get_data(as_text=True)), synthetic_bundle().to_dict())
-        downloaded.close()
-        files = list(self.output_dir.glob("tokens-*.json"))
-        self.assertEqual(len(files), 1)
-        self.assertEqual(json.loads(files[0].read_text()), synthetic_bundle().to_dict())
-        if os.name == "posix":
-            self.assertEqual(files[0].stat().st_mode & 0o777, 0o600)
+        response = self.client.get(
+            f"/api/jobs/{job['id']}/result", headers=self.headers
+        )
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(
+            response.get_json()["records"][0]["raw"], synthetic_bundle().to_dict()
+        )
+        self.assertEqual(list(self.output_dir.iterdir()), [])
+        response = self.client.post(
+            f"/api/jobs/{job['id']}/ack",
+            json={"ids": [job["id"]], "complete": True},
+            headers=self.headers,
+        )
+        self.assertEqual(response.status_code, 200)
+        self.assertIsNone(
+            self.client.get("/api/jobs/current", headers=self.headers).get_json()["job"]
+        )
 
     def test_invalid_inputs_never_start_extractor(self):
         cases = [
@@ -172,8 +181,10 @@ class WebTests(unittest.TestCase):
         done = self.wait_for(job["id"], {"error"})
         self.assert_public_safe(done)
         self.assertEqual(list(self.output_dir.glob("*.json")), [])
-        unavailable = self.client.get(f"/api/jobs/{job['id']}/download", headers=self.headers)
-        self.assertIn(unavailable.status_code, (404, 409))
+        unavailable = self.client.get(
+            f"/api/jobs/{job['id']}/download", headers=self.headers
+        )
+        self.assertIn(unavailable.status_code, (404, 410))
 
     def test_totp_then_email_challenges_are_consumed_once(self):
         received = []

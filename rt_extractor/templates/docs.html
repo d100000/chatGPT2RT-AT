@@ -47,7 +47,7 @@
   <footer class="docs-footer">
     <p>Bob AI，只做最靠谱的 AI。</p>
     <p><strong>来源与维护：</strong>功能和保存方式以<a href="{{ repository_url }}" target="_blank" rel="noopener noreferrer">源码仓库与维护说明</a>为准；凭据概念参考<a href="https://www.rfc-editor.org/rfc/rfc6749" target="_blank" rel="noopener noreferrer">OAuth 2.0（RFC 6749）</a>与<a href="https://openid.net/specs/openid-connect-core-1_0.html#IDToken" target="_blank" rel="noopener noreferrer">OpenID Connect Core</a>。</p>
-    <p>Token 获取结果保存在运行服务的设备；格式转换在浏览器内存中处理。</p>
+    <p>网页结果仅缓存在当前浏览器会话中；服务器临时处理登录和结果交接，不写入结果文件。手动导入的格式转换在浏览器内存中完成。</p>
   </footer>
 </body>
 </html>

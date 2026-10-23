@@ -7,9 +7,9 @@
   <div class="site-notice-items">
     <section class="site-notice-item" aria-labelledby="site-notice-privacy-title">
       <h3 id="site-notice-privacy-title">数据与隐私</h3>
-      <p>格式转换仅在浏览器内存中完成，不上传服务器，也不写入浏览器存储。密码和 2FA 密钥不持久保存。</p>
-      <p class="site-notice-retention">Token 获取结果仅保存在运行本工具的设备中，不会上传给作者，请自行妥善保管。</p>
-      <p>防刷使用匿名设备和会话 Cookie，仅用于频率控制，不含账号或 Token，不采集硬件指纹。</p>
+      <p>网页任务按浏览器会话隔离，Token 结果仅缓存在当前浏览器会话中。服务器仅在登录和结果交接期间临时使用内存，不写入 Token、账号历史或结果文件。</p>
+      <p class="site-notice-retention">浏览器接收结果后会通知服务器清除临时结果，未接收结果会自动过期。浏览器缓存有效期 30 分钟，页面运行或下次读取时清除过期缓存。密码和 2FA 密钥不写入浏览器缓存，请及时下载结果并主动清理。</p>
+      <p>手动导入的格式转换文件仅在浏览器内存中处理，不上传服务器。匿名 Cookie 用于会话隔离和频率控制，不含账号或 Token，不采集硬件指纹。</p>
     </section>
     <section class="site-notice-item" aria-labelledby="site-notice-source-title">
       <h3 id="site-notice-source-title">代码完全开源</h3>

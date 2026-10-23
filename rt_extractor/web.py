@@ -2,9 +2,8 @@
 from __future__ import annotations
 
 import argparse
+import hashlib
 import hmac
-import io
-import json
 import os
 from pathlib import Path
 import re
@@ -13,18 +12,17 @@ import time
 from typing import Callable
 from urllib.parse import urlsplit
 
-from flask import Flask, Response, abort, g, jsonify, render_template, request, send_file
+from flask import Flask, Response, abort, g, jsonify, render_template, request
 from werkzeug.exceptions import RequestEntityTooLarge
 
 from .abuse import AbuseGuard, AbuseLimited, AbusePolicy, LeasedIterator
 from .api import extract_tokens
-from .batch import DEFAULT_CONCURRENCY, BatchInputError, BatchManager, parse_accounts
+from .batch import DEFAULT_CONCURRENCY, BatchInputError, parse_accounts
 from .browser_identity import BrowserIdentities
-from .cpa import build_cpa_record
 from .seo import (DOC_PAGES, DOCS_BY_SLUG, REPOSITORY_URL, llms_text, metadata,
                   robots_text, sitemap_xml, structured_data, validate_public_url)
-from .sub2api import build_sub2api_export
-from .web_jobs import ACTIVE, JobManager, _credentials
+from .web_jobs import ACTIVE, _credentials
+from .workspace_registry import WorkspaceRegistry
 
 def create_app(output_dir: str | Path | None = None, extractor: Callable | None = None, *,
                abuse_policy: AbusePolicy | None = None, abuse_clock: Callable = time.monotonic) -> Flask:
@@ -36,31 +34,45 @@ def create_app(output_dir: str | Path | None = None, extractor: Callable | None 
     app.extensions["rt_abuse"] = abuse
     browser_identities = BrowserIdentities()
     app.extensions["rt_browser_identities"] = browser_identities
-    directory = Path(output_dir or Path.cwd() / "rt-output").expanduser().resolve()
-    directory.mkdir(mode=0o700, parents=True, exist_ok=True)
-    manager = JobManager(directory, extractor or extract_tokens)
-    app.extensions["rt_jobs"] = manager
-    batches = BatchManager(manager)
-    app.extensions["rt_batches"] = batches
+    # Kept as a compatibility argument only. Web authentication never opens,
+    # restores, creates, scans or writes an output directory.
+    registry = WorkspaceRegistry(extractor or extract_tokens, clock=abuse_clock)
+    app.extensions["rt_workspaces"] = registry
 
     exports = {"download", "view_rt", "download_cpa", "download_sub2api", "download_batch_zip",
-               "download_batch_rt", "download_batch_sub2api", "download_batch_cpa", "batch_conversion_source"}
+               "download_batch_rt", "download_batch_sub2api", "download_batch_cpa", "batch_conversion_source",
+               "batch_results", "job_result"}
+
+    def session_value(purpose, session):
+        return hmac.new(app.config["RT_CSRF_TOKEN"].encode(),
+                        f"{purpose}:{session}".encode(), hashlib.sha256).hexdigest()
 
     def reject_access(message):
         abuse.denied_access(g.abuse_identity)
         return jsonify(error=message), 403
 
     def admit_task(emails, start):
-        # Both managers share this RLock. Conflicts must not reserve account
-        # attempts, and failed starts refund every account as one transaction.
-        with manager.lock:
-            if manager.active_batch or any(job.status in ACTIVE for job in manager.jobs.values()):
-                raise ValueError("已有任务进行中，请先完成或取消当前任务")
-            reservation = abuse.reserve_accounts(g.abuse_identity, emails)
+        # Admission must stay registered until the task starts. Otherwise a
+        # concurrent clear/expiry could detach this workspace before start(),
+        # leaving credentials and results outside cancellation/TTL management.
+        # Always take registry -> manager locks, as cleanup does.
+        with registry.lock:
+            workspace = registry.ensure(g.workspace_owner)
+            manager = workspace.jobs
             try:
-                return start()
+                with manager.lock:
+                    if manager.active_batch or any(job.status in ACTIVE for job in manager.jobs.values()):
+                        raise ValueError("已有任务进行中，请先完成或取消当前任务")
+                    if any(job.payload is not None for job in manager.jobs.values()):
+                        raise ValueError("请先将上次结果同步到本浏览器后再开始新任务")
+                    reservation = abuse.reserve_accounts(g.abuse_identity, emails)
+                    try:
+                        return start(workspace)
+                    except BaseException:
+                        reservation.release()
+                        raise
             except BaseException:
-                reservation.release()
+                registry.release_empty(g.workspace_owner, expected=workspace)
                 raise
 
     @app.errorhandler(AbuseLimited)
@@ -74,7 +86,8 @@ def create_app(output_dir: str | Path | None = None, extractor: Callable | None 
     def guard():
         browser = browser_identities.resolve(request.cookies)
         g.abuse_identity = abuse.identity(request.remote_addr, browser.device, browser.session)
-        abuse.check_request(g.abuse_identity, control=request.endpoint in {"cancel", "cancel_batch"},
+        abuse.check_request(g.abuse_identity, control=request.endpoint in {
+            "cancel", "cancel_batch", "ack_batch", "ack_job", "clear_workspace"},
                             static=request.endpoint == "static")
         try:
             host = urlsplit("http://" + request.host)
@@ -88,35 +101,48 @@ def create_app(output_dir: str | Path | None = None, extractor: Callable | None 
         origin = request.headers.get("Origin")
         if origin and origin != request.host_url.rstrip("/"):
             return reject_access("请求来源不匹配")
-        supplied_csrf = request.headers.get("X-RT-CSRF", "")
-        if request.path.startswith("/api/") and (len(supplied_csrf) > 128 or not hmac.compare_digest(
-            supplied_csrf.encode(), app.config["RT_CSRF_TOKEN"].encode(),
-        )):
-            return reject_access("页面凭据已过期，请刷新页面")
         endpoint = request.endpoint
+        if (request.method == "GET" and endpoint in {"index", "converter", "network"}
+                and (browser.device is None or browser.session is None)):
+            abuse.check_identity_issuance(g.abuse_identity)
+            browser = browser_identities.resolve(request.cookies, issue=True)
+            g.browser_cookies = browser.cookies
+        if browser.session is not None:
+            g.workspace_owner = session_value("workspace", browser.session)
+            g.csrf_token = session_value("csrf", browser.session)
+        if request.path.startswith("/api/"):
+            supplied_csrf = request.headers.get("X-RT-CSRF", "")
+            if (browser.session is None or len(supplied_csrf) > 128 or not hmac.compare_digest(
+                    supplied_csrf.encode(), g.csrf_token.encode())):
+                return reject_access("页面凭据已过期，请刷新页面")
+            g.workspace = registry.get(g.workspace_owner)
         if endpoint in {"start", "start_batch"}:
             abuse.check_action(g.abuse_identity, "submit")
         elif endpoint == "code":
             job_id = (request.view_args or {}).get("job_id")
-            with manager.lock:
-                known_job = job_id if job_id in manager.jobs else None
+            workspace = g.workspace
+            if workspace is not None:
+                with workspace.jobs.lock:
+                    known_job = job_id if job_id in workspace.jobs.jobs else None
+            else:
+                known_job = None
             abuse.check_action(g.abuse_identity, "verify", job_id=known_job)
         elif endpoint in exports:
             abuse.check_action(g.abuse_identity, "export")
             g.export_lease = abuse.acquire_export()
-        limits = {"start": 16 * 1024, "code": 4 * 1024, "cancel": 1024, "cancel_batch": 1024}
+        limits = {"start": 16 * 1024, "code": 4 * 1024, "cancel": 1024, "cancel_batch": 1024,
+                  "ack_batch": 96 * 1024, "ack_job": 4 * 1024, "clear_workspace": 1024}
         if endpoint in limits:
             request.max_content_length = limits[endpoint]
             if request.content_length is not None and request.content_length > limits[endpoint]:
                 raise RequestEntityTooLarge()
-        if (request.method == "GET" and endpoint in {"index", "converter", "network"}
-                and (browser.device is None or browser.session is None)):
-            abuse.check_identity_issuance(g.abuse_identity)
-            g.browser_cookies = browser_identities.resolve(request.cookies, issue=True).cookies
 
     @app.after_request
     def secure_headers(response):
-        response.headers["Cache-Control"] = "no-store"
+        private = request.path.startswith("/api/") or request.endpoint in {"index", "converter", "network"}
+        response.headers["Cache-Control"] = "private, no-store, max-age=0" if private else "no-store"
+        if private:
+            response.vary.add("Cookie")
         response.headers["X-Content-Type-Options"] = "nosniff"
         response.headers["Referrer-Policy"] = "no-referrer"
         nonce = getattr(g, "structured_data_nonce", None)
@@ -165,17 +191,20 @@ def create_app(output_dir: str | Path | None = None, extractor: Callable | None 
 
     @app.get("/")
     def index():
-        return render_template("index.html", csrf_token=app.config["RT_CSRF_TOKEN"],
+        return render_template("index.html", csrf_token=getattr(g, "csrf_token", ""),
+                               workspace_owner=getattr(g, "workspace_owner", ""),
                                seo=metadata(app.config["BOB_AI_PUBLIC_URL"], "/"))
 
     @app.get("/converter")
     def converter():
-        return render_template("converter.html", csrf_token=app.config["RT_CSRF_TOKEN"],
+        return render_template("converter.html", csrf_token=getattr(g, "csrf_token", ""),
+                               workspace_owner=getattr(g, "workspace_owner", ""),
                                seo=metadata(app.config["BOB_AI_PUBLIC_URL"], "/converter"))
 
     @app.get("/network")
     def network():
-        return render_template("network.html", csrf_token=app.config["RT_CSRF_TOKEN"],
+        return render_template("network.html", csrf_token=getattr(g, "csrf_token", ""),
+                               workspace_owner=getattr(g, "workspace_owner", ""),
                                seo=metadata(app.config["BOB_AI_PUBLIC_URL"], "/network"))
 
     @app.get("/docs", defaults={"slug": ""})
@@ -209,6 +238,28 @@ def create_app(output_dir: str | Path | None = None, extractor: Callable | None 
     def health():
         return jsonify(status="ok")
 
+    def missing(kind="任务"):
+        return jsonify(error=f"{kind}不存在"), 404
+
+    def owned_job(job_id):
+        workspace = g.workspace
+        if workspace is None:
+            return None
+        with workspace.jobs.lock:
+            return workspace.jobs.jobs.get(job_id)
+
+    def owned_batch(batch_id):
+        workspace = g.workspace
+        if workspace is None:
+            return None
+        with workspace.jobs.lock:
+            return workspace.batches.batches.get(batch_id)
+
+    def clear_accounts(accounts):
+        for _, credentials in accounts:
+            credentials.clear()
+        accounts.clear()
+
     @app.post("/api/jobs")
     def start():
         try:
@@ -216,25 +267,31 @@ def create_app(output_dir: str | Path | None = None, extractor: Callable | None 
         except ValueError as exc:
             return jsonify(error=str(exc)), 400
         try:
-            return jsonify(admit_task([credentials["email"]], lambda: manager.start(credentials))), 202
+            result = admit_task([credentials["email"]], lambda workspace: workspace.jobs.start(credentials))
+            return jsonify(result), 202
         except AbuseLimited:
             credentials.clear()
             raise
         except ValueError as exc:
             credentials.clear()
             return jsonify(error=str(exc)), 409
+        except Exception:
+            credentials.clear()
+            return jsonify(error="任务无法启动，请稍后重试"), 500
 
     @app.get("/api/jobs/current")
     def current():
-        return jsonify(job=manager.snapshot())
+        return jsonify(job=g.workspace.jobs.snapshot() if g.workspace else None)
 
     @app.get("/api/jobs/<job_id>")
     def status(job_id: str):
-        job = manager.snapshot(job_id)
-        return jsonify(job) if job else (jsonify(error="任务不存在"), 404)
+        job = g.workspace.jobs.snapshot(job_id) if g.workspace else None
+        return jsonify(job) if job else missing()
 
     @app.post("/api/jobs/<job_id>/code")
     def code(job_id: str):
+        if owned_job(job_id) is None:
+            return missing()
         payload = request.get_json(silent=True)
         if not isinstance(payload, dict):
             return jsonify(error="请输入验证码"), 400
@@ -243,91 +300,20 @@ def create_app(output_dir: str | Path | None = None, extractor: Callable | None 
                 or not isinstance(challenge_id, str) or len(challenge_id) > 128):
             return jsonify(error="验证码须为 6 位数字"), 400
         try:
-            return jsonify(manager.submit_code(job_id, challenge_id, value.strip()))
+            return jsonify(g.workspace.jobs.submit_code(job_id, challenge_id, value.strip()))
         except KeyError:
-            return jsonify(error="任务不存在"), 404
+            return missing()
         except ValueError as exc:
             return jsonify(error=str(exc)), 409
 
     @app.post("/api/jobs/<job_id>/cancel")
     def cancel(job_id: str):
+        if g.workspace is None:
+            return missing()
         try:
-            return jsonify(manager.cancel(job_id))
+            return jsonify(g.workspace.jobs.cancel(job_id))
         except KeyError:
-            return jsonify(error="任务不存在"), 404
-
-    @app.get("/api/jobs/<job_id>/download")
-    def download(job_id: str):
-        job = manager.snapshot(job_id)
-        if job is None:
-            return jsonify(error="任务不存在"), 404
-        if job["status"] != "success":
-            return jsonify(error="任务尚未成功完成"), 409
-        output = Path(job["result"]["path"])
-        if not output.is_file() or output.is_symlink():
-            return jsonify(error="结果文件已被移走，请查看保存目录"), 404
-        return send_file(output, as_attachment=True, download_name=output.name, mimetype="application/json")
-
-    @app.get("/api/jobs/<job_id>/rt")
-    def view_rt(job_id: str):
-        job = manager.snapshot(job_id)
-        if job is None:
-            return jsonify(error="任务不存在"), 404
-        if job["status"] != "success":
-            return jsonify(error="任务尚未成功完成"), 409
-        output = Path(job["result"]["path"])
-        if not output.is_file() or output.is_symlink():
-            return jsonify(error="结果文件已被移走，请查看保存目录"), 404
-        try:
-            payload = json.loads(output.read_text(encoding="utf-8"))
-        except (OSError, ValueError):
-            return jsonify(error="结果文件无法读取，请检查已保存的 JSON"), 409
-        value = payload.get("refresh_token") if isinstance(payload, dict) else None
-        if not isinstance(value, str) or not value.strip():
-            return jsonify(error="结果文件缺少有效 RT"), 409
-        return jsonify(refresh_token=value)
-
-    @app.get("/api/jobs/<job_id>/cpa-download")
-    def download_cpa(job_id: str):
-        job = manager.snapshot(job_id)
-        if job is None:
-            return jsonify(error="任务不存在"), 404
-        if job["status"] != "success":
-            return jsonify(error="任务尚未成功完成"), 409
-        output = Path(job["result"]["path"])
-        if not output.is_file() or output.is_symlink():
-            return jsonify(error="结果文件已被移走，请查看保存目录"), 404
-        try:
-            payload = json.loads(output.read_text(encoding="utf-8"))
-        except (OSError, ValueError):
-            return jsonify(error="结果文件无法读取，请检查已保存的 JSON"), 409
-        try:
-            record = build_cpa_record(payload)
-        except ValueError as exc:
-            return jsonify(error=str(exc)), 409
-        stream = io.BytesIO((json.dumps(record, ensure_ascii=False, indent=2) + "\n").encode("utf-8"))
-        return send_file(stream, as_attachment=True, download_name=f"codex-{job_id}.json", mimetype="application/json")
-
-    @app.get("/api/jobs/<job_id>/sub2api-download")
-    def download_sub2api(job_id: str):
-        job = manager.snapshot(job_id)
-        if job is None:
-            return jsonify(error="任务不存在"), 404
-        if job["status"] != "success":
-            return jsonify(error="任务尚未成功完成"), 409
-        output = Path(job["result"]["path"])
-        if not output.is_file() or output.is_symlink():
-            return jsonify(error="结果文件已被移走，请查看保存目录"), 404
-        try:
-            payload = json.loads(output.read_text(encoding="utf-8"))
-        except (OSError, ValueError):
-            return jsonify(error="结果文件无法读取，请检查已保存的 JSON"), 409
-        try:
-            document = build_sub2api_export([payload])
-        except ValueError as exc:
-            return jsonify(error=str(exc)), 409
-        stream = io.BytesIO((json.dumps(document, ensure_ascii=False, indent=2) + "\n").encode("utf-8"))
-        return send_file(stream, as_attachment=True, download_name=f"sub2api-{job_id}.json", mimetype="application/json")
+            return missing()
 
     @app.post("/api/batches")
     def start_batch():
@@ -337,73 +323,159 @@ def create_app(output_dir: str | Path | None = None, extractor: Callable | None 
         except BatchInputError as exc:
             return jsonify(error=str(exc), errors=exc.errors), 400
         try:
-            return jsonify(admit_task((data["email"] for _, data in accounts),
-                           lambda: batches.start(accounts, concurrency=payload.get("concurrency", DEFAULT_CONCURRENCY)))), 202
+            result = admit_task((data["email"] for _, data in accounts), lambda workspace:
+                                workspace.batches.start(accounts, concurrency=payload.get("concurrency", DEFAULT_CONCURRENCY)))
+            return jsonify(result), 202
         except AbuseLimited:
-            for _, credentials in accounts:
-                credentials.clear()
-            accounts.clear()
+            clear_accounts(accounts)
             raise
         except ValueError as exc:
-            for _, credentials in accounts:
-                credentials.clear()
-            accounts.clear()
+            clear_accounts(accounts)
             return jsonify(error=str(exc)), 409
         except Exception:
-            for _, credentials in accounts:
-                credentials.clear()
-            accounts.clear()
-            return jsonify(error="批次无法启动，请检查输出目录权限"), 500
+            clear_accounts(accounts)
+            return jsonify(error="批次无法启动，请稍后重试"), 500
 
     @app.get("/api/batches/current")
     def current_batch():
-        return jsonify(batch=batches.snapshot())
+        return jsonify(batch=g.workspace.batches.snapshot() if g.workspace else None)
 
     @app.get("/api/batches/<batch_id>")
     def batch_status(batch_id: str):
-        batch = batches.snapshot(batch_id)
-        return jsonify(batch) if batch else (jsonify(error="批次不存在"), 404)
+        batch = g.workspace.batches.snapshot(batch_id) if g.workspace else None
+        return jsonify(batch) if batch else missing("批次")
 
     @app.post("/api/batches/<batch_id>/cancel")
     def cancel_batch(batch_id: str):
+        if g.workspace is None:
+            return missing("批次")
         try:
-            return jsonify(batches.cancel(batch_id))
+            return jsonify(g.workspace.batches.cancel(batch_id))
         except KeyError:
-            return jsonify(error="批次不存在"), 404
+            return missing("批次")
 
-    def batch_download(batch_id: str, *, rt_only: bool = False, sub2api: bool = False, cpa: bool = False):
+    def handoff_record(job):
+        return {"id": job.id, "line": job.line, "email": job.email, **job.payload}
+
+    @app.get("/api/batches/<batch_id>/results")
+    def batch_results(batch_id: str):
+        if g.workspace is None:
+            return missing("批次")
+        with g.workspace.jobs.lock:
+            batch = g.workspace.batches.batches.get(batch_id)
+            if batch is None:
+                return missing("批次")
+            return jsonify(batch=batch.snapshot(), records=[handoff_record(job) for job in batch.rows
+                           if job.status == "success" and job.payload is not None],
+                           expires_in=registry.result_ttl)
+
+    @app.get("/api/jobs/<job_id>/result")
+    def job_result(job_id: str):
+        if g.workspace is None:
+            return missing()
+        with g.workspace.jobs.lock:
+            job = g.workspace.jobs.jobs.get(job_id)
+            if job is None:
+                return missing()
+            return jsonify(job=job.snapshot(), records=[handoff_record(job)] if job.payload is not None else [],
+                           expires_in=registry.result_ttl)
+
+    def acknowledgement_payload():
+        payload = request.get_json(silent=True)
+        if (not isinstance(payload, dict) or set(payload) - {"ids", "complete"}
+                or not isinstance(payload.get("ids"), list) or len(payload["ids"]) > 1000
+                or any(not isinstance(value, str) or not re.fullmatch(r"[0-9a-f]{32}", value)
+                       for value in payload["ids"])
+                or type(payload.get("complete", False)) is not bool):
+            raise ValueError("无效的结果确认请求")
+        return set(payload["ids"]), payload.get("complete", False)
+
+    @app.post("/api/batches/<batch_id>/ack")
+    def ack_batch(batch_id: str):
         try:
-            stream, name, mimetype = batches.export(batch_id, rt_only=rt_only, sub2api=sub2api, cpa=cpa)
-        except KeyError:
-            return jsonify(error="批次不存在"), 404
+            ids, complete = acknowledgement_payload()
         except ValueError as exc:
-            return jsonify(error=str(exc)), 409
-        return send_file(stream, as_attachment=True, download_name=name, mimetype=mimetype)
+            return jsonify(error=str(exc)), 400
+        workspace = g.workspace
+        if workspace is None:
+            return jsonify(acknowledged=True, cleared=True)
+        clear = False
+        with workspace.jobs.lock:
+            batch = workspace.batches.batches.get(batch_id)
+            if batch is None:
+                return jsonify(acknowledged=True, cleared=True)
+            if not ids.issubset({job.id for job in batch.rows}):
+                return jsonify(error="结果确认与当前批次不匹配"), 400
+            pending = {job.id for job in batch.rows if job.payload is not None}
+            if complete and (batch.status not in {"completed", "cancelled"} or pending - ids):
+                return jsonify(error="请先同步全部结果并等待批次完成"), 409
+            for job in batch.rows:
+                if job.id in ids:
+                    workspace.jobs.acknowledge(job)
+            if complete:
+                for job in batch.rows:
+                    workspace.jobs.jobs.pop(job.id, None)
+                workspace.batches.batches.pop(batch_id, None)
+                if workspace.batches.current_id == batch_id:
+                    workspace.batches.current_id = None
+                if workspace.jobs.current_id in {job.id for job in batch.rows}:
+                    workspace.jobs.current_id = None
+                clear = not workspace.jobs.jobs and not workspace.batches.batches
+        if clear:
+            registry.release_empty(g.workspace_owner, expected=workspace)
+        return jsonify(acknowledged=True, cleared=complete)
 
-    @app.get("/api/batches/<batch_id>/download")
-    def download_batch_zip(batch_id: str):
-        return batch_download(batch_id)
-
-    @app.get("/api/batches/<batch_id>/rt-download")
-    def download_batch_rt(batch_id: str):
-        return batch_download(batch_id, rt_only=True)
-
-    @app.get("/api/batches/<batch_id>/sub2api-download")
-    def download_batch_sub2api(batch_id: str):
-        return batch_download(batch_id, sub2api=True)
-
-    @app.get("/api/batches/<batch_id>/cpa-download")
-    def download_batch_cpa(batch_id: str):
-        return batch_download(batch_id, cpa=True)
-
-    @app.get("/api/batches/<batch_id>/conversion-source")
-    def batch_conversion_source(batch_id: str):
+    @app.post("/api/jobs/<job_id>/ack")
+    def ack_job(job_id: str):
         try:
-            return jsonify(batches.conversion_source(batch_id))
-        except KeyError:
-            return jsonify(error="批次不存在"), 404
+            ids, complete = acknowledgement_payload()
         except ValueError as exc:
-            return jsonify(error=str(exc)), 409
+            return jsonify(error=str(exc)), 400
+        workspace = g.workspace
+        if workspace is None:
+            return jsonify(acknowledged=True, cleared=True)
+        clear = False
+        with workspace.jobs.lock:
+            job = workspace.jobs.jobs.get(job_id)
+            if job is None:
+                return jsonify(acknowledged=True, cleared=True)
+            if not ids.issubset({job_id}):
+                return jsonify(error="结果确认与当前任务不匹配"), 400
+            if complete and (job.status in ACTIVE or job.payload is not None and job_id not in ids):
+                return jsonify(error="请先同步结果并等待任务完成"), 409
+            if job_id in ids:
+                workspace.jobs.acknowledge(job)
+            if complete and not job.batch_id:
+                workspace.jobs.jobs.pop(job_id, None)
+                if workspace.jobs.current_id == job_id:
+                    workspace.jobs.current_id = None
+                clear = not workspace.jobs.jobs and not workspace.batches.batches
+        if clear:
+            registry.release_empty(g.workspace_owner, expected=workspace)
+        return jsonify(acknowledged=True, cleared=complete and not job.batch_id)
+
+    @app.delete("/api/workspace")
+    def clear_workspace():
+        registry.remove(g.workspace_owner)
+        return jsonify(cleared=True)
+
+    def retired_job_export(job_id):
+        if owned_job(job_id) is None:
+            return missing()
+        return jsonify(error="结果仅交接到当前浏览器缓存，请在当前浏览器查看或导出"), 410
+
+    def retired_batch_export(batch_id):
+        if owned_batch(batch_id) is None:
+            return missing("批次")
+        return jsonify(error="结果仅交接到当前浏览器缓存，请在当前浏览器查看或导出"), 410
+
+    for route, endpoint in (("download", "download"), ("rt", "view_rt"),
+                            ("cpa-download", "download_cpa"), ("sub2api-download", "download_sub2api")):
+        app.add_url_rule(f"/api/jobs/<job_id>/{route}", endpoint, retired_job_export, methods=["GET"])
+    for route, endpoint in (("download", "download_batch_zip"), ("rt-download", "download_batch_rt"),
+                            ("sub2api-download", "download_batch_sub2api"), ("cpa-download", "download_batch_cpa"),
+                            ("conversion-source", "batch_conversion_source")):
+        app.add_url_rule(f"/api/batches/<batch_id>/{route}", endpoint, retired_batch_export, methods=["GET"])
 
     return app
 
@@ -411,7 +483,8 @@ def create_app(output_dir: str | Path | None = None, extractor: Callable | None 
 def main() -> None:
     parser = argparse.ArgumentParser(description="独立 RT 提取器本地网页")
     parser.add_argument("--port", type=int, default=8765)
-    parser.add_argument("--output-dir", type=Path, default=Path.cwd() / "rt-output")
+    parser.add_argument("--output-dir", type=Path, default=None,
+                        help="已弃用；网页结果仅交接到浏览器缓存，此参数不读写目录")
     args = parser.parse_args()
     if not 1 <= args.port <= 65535:
         parser.error("端口须为 1 到 65535")

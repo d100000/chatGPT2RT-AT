@@ -4,7 +4,7 @@
 
 ## 更新已有安装
 
-先确认没有仍在执行的登录任务。重启无法续跑活动任务；已经保存的成功结果文件会保留。以下命令在实际部署的项目目录执行：
+先确认没有仍在执行的登录任务，并将本浏览器所需结果下载保存。重启无法续跑活动任务或恢复尚未交接的内存结果；旧版遗留文件不会自动删除。以下命令在实际部署的项目目录执行：
 
 ```bash
 git status --short
@@ -26,9 +26,23 @@ git pull --ff-only
 | systemd / Gunicorn | 重启实际管理 Python / Gunicorn 的服务；服务名由部署者设置 |
 | Docker / Compose | 确认代码已进入运行镜像或挂载目录，按现有构建配置重建并替换对应容器 |
 | 宝塔进程管理 / Supervisor | 重启对应 Python 应用进程，检查工作目录、解释器与入口是否一致 |
-| 手动执行 `python -m rt_extractor.web` | 正常停止原进程，再以原端口、输出目录及环境配置启动 |
+| 手动执行 `python -m rt_extractor.web` | 正常停止原进程，再以原端口及环境配置启动；网页已不使用输出目录 |
 
 只重启 Nginx 不会重启 Python 应用。不要为解决加载错误去删除 Host、Origin、CSRF 或本机访问校验。
+
+<a id="privacy-migration"></a>
+## 从共享任务旧版迁移到浏览器缓存版
+
+旧版使用全局任务与输出目录恢复，不能隔离多位访问者。发现陌生账号或结果时，应先暂停旧提取入口，再按以下步骤升级：
+
+1. 更新代码和服务实际使用的安装包，重启实际 Python / Gunicorn 进程或替换容器，避免旧进程继续提供共享状态。不要只更新静态资源。
+2. 对 `/`、`/converter`、`/network` 和 `/api/` 禁用 CDN / 反向代理共享缓存，并清除此前缓存的工具 HTML 与接口响应。保留 `Cache-Control: private, no-store, max-age=0`、`Vary: Cookie` 和安全 Cookie 属性。
+3. 新网页不再读取旧 `output/`、`rt-output/` 或自定义目录。管理员应检查历史 Token JSON、CPA / Sub2API JSON、ZIP、`batch-state.json` 及备份，按实际保存需求安全清理；仓库不会自动删除这些用户文件。确认这些目录从未被 Web 服务器作为静态目录暴露。
+4. 对可能已被其他人看到的 AT / RT，按账号平台提供的方式撤销会话、重新认证或更换凭据。删除服务器文件无法使已经泄露的 Token 失效。日志、截图和备份也应检查，避免保留完整凭据；代理不得记录请求正文、Cookie 或授权头。
+5. 用两个独立浏览器配置测试：A 提交合成任务时 B 保持空白；B 请求 A 的任务 / 结果 / 取消接口返回 404；清理 A 不影响 B。普通状态不得包含 Token，网页使用全过程不应产生新的结果文件。
+6. 确认浏览器显示“当前浏览器缓存”而非“已保存到服务器”。结果缓存 30 分钟，下载文件由浏览器生成；服务重启不能恢复尚未交接的结果。相同浏览器配置会共享会话身份，人员之间应使用不同配置或独立隐私窗口。
+
+服务只在登录和交接期间临时使用内存，收到浏览器确认即清除对应 Token；未交接已结束任务固定 10 分钟过期，活动工作空间闲置 10 分钟后取消清理。服务器或操作系统另设的调试日志、核心转储、交换分区与备份属于部署环境，也应避免留存敏感内存或请求内容。CLI 显式文件输出不受网页模式改变影响。
 
 <a id="module-loading"></a>
 ## 更新后输入计数不变或按钮不可用
@@ -87,7 +101,7 @@ BOB_AI_PUBLIC_URL=https://tools.bob-api.com
 - **systemd**：在对应服务的 `[Service]` 中使用 `Environment="BOB_AI_PUBLIC_URL=https://tools.bob-api.com"`，或在服务已经引用的 `EnvironmentFile` 中写入上面的赋值行。修改服务单元或 override 后重新加载 systemd 配置，再重启该实际服务。只在交互式终端执行 `export` 后重启 systemd，通常不会让服务继承该终端变量。
 - **Docker / Compose**：将变量写入对应容器的环境配置；Compose 可在实际服务的 `environment` 下加入 `BOB_AI_PUBLIC_URL: https://tools.bob-api.com`。然后按现有构建和部署配置更新、重建或重新创建对应容器，确认新容器确实收到变量。该仓库不假定某个 Compose 服务名。
 - **宝塔 / Supervisor 等进程管理器**：在该应用的环境变量配置中设置，再重启对应进程，不要只修改某个临时终端会话。
-- **手动运行**：可在本次启动命令前设置变量，例如 `BOB_AI_PUBLIC_URL=https://tools.bob-api.com .venv/bin/python -m rt_extractor.web --port 8765 --output-dir output`；后续每次启动也需保留相同配置。
+- **手动运行**：可在本次启动命令前设置变量，例如 `BOB_AI_PUBLIC_URL=https://tools.bob-api.com .venv/bin/python -m rt_extractor.web --port 8765`；后续每次启动也需保留相同配置。
 
 应用重新加载后，应检查线上 `/docs` 的 canonical 和 robots、`/sitemap.xml` 的五个条目，以及 `/robots.txt` 中的站点地图地址。域名配置不能证明这些地址已能从公网抓取；仍需结合实际入口、HTTPS 和访问策略检查。
 

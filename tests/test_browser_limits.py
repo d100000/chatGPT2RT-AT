@@ -1,4 +1,5 @@
 """Offline contracts for signed browser identities and layered abuse budgets."""
+
 from __future__ import annotations
 
 from concurrent.futures import ThreadPoolExecutor
@@ -11,9 +12,14 @@ from unittest.mock import patch
 
 from rt_extractor.abuse import AbuseGuard, AbuseLimited, Quota, RequestIdentity
 from rt_extractor.browser_identity import (
-    BrowserIdentities, DEVICE_COOKIE, DEVICE_MAX_AGE, SESSION_COOKIE, SESSION_MAX_AGE,
+    BrowserIdentities,
+    DEVICE_COOKIE,
+    DEVICE_MAX_AGE,
+    SESSION_COOKIE,
+    SESSION_MAX_AGE,
 )
 from rt_extractor.web import create_app
+from tests.web_client import browser_headers, workspace_for
 from tests.test_abuse import Clock, policy
 
 
@@ -258,10 +264,14 @@ class BrowserWebTests(unittest.TestCase):
         async def forbidden(*_args, **_kwargs):
             raise AssertionError("Browser security tests must not start extraction")
 
-        app = create_app(self.output, extractor=forbidden,
-                         abuse_policy=abuse_policy or policy(), abuse_clock=self.clock)
+        app = create_app(
+            self.output,
+            extractor=forbidden,
+            abuse_policy=abuse_policy or policy(),
+            abuse_clock=self.clock,
+        )
         app.config["TESTING"] = True
-        return app, {"X-RT-CSRF": app.config["RT_CSRF_TOKEN"]}
+        return app, {}
 
     @staticmethod
     def response_cookies(response):
@@ -278,7 +288,7 @@ class BrowserWebTests(unittest.TestCase):
 
     def browser(self, app):
         client = app.test_client()
-        self.assertEqual(client.get("/").status_code, 200)
+        browser_headers(app, client)
         self.assertIsNotNone(client.get_cookie(DEVICE_COOKIE))
         self.assertIsNotNone(client.get_cookie(SESSION_COOKIE))
         return client
@@ -331,9 +341,19 @@ class BrowserWebTests(unittest.TestCase):
         second.set_cookie(DEVICE_COOKIE, first.get_cookie(DEVICE_COOKIE).value)
         response = second.get("/")
         self.assertEqual([*self.response_cookies(response)], [SESSION_COOKIE])
-        self.assertNotEqual(first.get_cookie(SESSION_COOKIE).value, second.get_cookie(SESSION_COOKIE).value)
-        self.assertEqual(first.get("/api/jobs/missing/rt", headers=headers).status_code, 404)
-        self.assert_limited(second.get("/api/jobs/missing/rt", headers=headers))
+        self.assertNotEqual(
+            first.get_cookie(SESSION_COOKIE).value,
+            second.get_cookie(SESSION_COOKIE).value,
+        )
+        self.assertEqual(
+            first.get(
+                "/api/jobs/missing/rt", headers=browser_headers(app, first)
+            ).status_code,
+            404,
+        )
+        self.assert_limited(
+            second.get("/api/jobs/missing/rt", headers=browser_headers(app, second))
+        )
 
     def test_distinct_sessions_on_same_device_have_independent_session_budgets(self):
         app, headers = self.app(layered_policy("session", exports=Quota(1, 60)))
@@ -342,8 +362,15 @@ class BrowserWebTests(unittest.TestCase):
         second.set_cookie(DEVICE_COOKIE, first.get_cookie(DEVICE_COOKIE).value)
         self.assertEqual(second.get("/").status_code, 200)
         for client in (first, second):
-            self.assertEqual(client.get("/api/jobs/missing/rt", headers=headers).status_code, 404)
-            self.assert_limited(client.get("/api/jobs/missing/rt", headers=headers))
+            self.assertEqual(
+                client.get(
+                    "/api/jobs/missing/rt", headers=browser_headers(app, client)
+                ).status_code,
+                404,
+            )
+            self.assert_limited(
+                client.get("/api/jobs/missing/rt", headers=browser_headers(app, client))
+            )
 
     def test_web_actions_enforce_each_browser_dimension(self):
         cases = (
@@ -352,7 +379,14 @@ class BrowserWebTests(unittest.TestCase):
             ("static_requests", "GET", "/static/app.css", {}, True, 200),
             ("static_burst", "GET", "/static/app.css", {}, True, 200),
             ("submissions", "POST", "/api/jobs", {}, True, 400),
-            ("verification", "POST", "/api/jobs/missing/code", {"code": "123456", "challenge_id": "synthetic"}, True, 404),
+            (
+                "verification",
+                "POST",
+                "/api/jobs/missing/code",
+                {"code": "123456", "challenge_id": "synthetic"},
+                True,
+                404,
+            ),
             ("exports", "GET", "/api/jobs/missing/rt", {}, True, 404),
             ("control", "POST", "/api/jobs/missing/cancel", {}, True, 404),
             ("access_failures", "GET", "/api/jobs/current", {}, False, 403),
@@ -360,14 +394,24 @@ class BrowserWebTests(unittest.TestCase):
         for layer in ("device", "session"):
             for budget, method, path, payload, csrf, expected in cases:
                 with self.subTest(layer=layer, budget=budget):
-                    app, headers = self.app(layered_policy(layer, **{budget: Quota(1, 60)}))
+                    app, headers = self.app(
+                        layered_policy(layer, **{budget: Quota(1, 60)})
+                    )
                     client = self.browser(app)
-                    kwargs = {"headers": headers if csrf else {}}
+                    kwargs = {"headers": browser_headers(app, client) if csrf else {}}
                     if method == "POST":
                         kwargs["json"] = payload
                     with client.open(path, method=method, **kwargs) as response:
-                        self.assertEqual(response.status_code, expected, response.get_data(as_text=True))
-                    next_path = "/static/synthetic-missing.css" if budget.startswith("static_") else path
+                        self.assertEqual(
+                            response.status_code,
+                            expected,
+                            response.get_data(as_text=True),
+                        )
+                    next_path = (
+                        "/static/synthetic-missing.css"
+                        if budget.startswith("static_")
+                        else path
+                    )
                     self.assert_limited(client.open(next_path, method=method, **kwargs))
 
     def test_failed_batch_start_refunds_browser_account_work_and_attempts(self):
@@ -376,35 +420,79 @@ class BrowserWebTests(unittest.TestCase):
                 base = layered_policy(layer, account_work=Quota(2, 60))
                 app, headers = self.app(replace(base, account_attempts=Quota(1, 60)))
                 client = self.browser(app)
-                payload = {"accounts_text": "one@example.com----synthetic-password----JBSWY3DPEHPK3PXP\n"
-                                           "two@example.com----synthetic-password----JBSWY3DPEHPK3PXP"}
-                manager = app.extensions["rt_batches"]
-                with patch.object(manager, "start", side_effect=OSError("synthetic failure")):
-                    self.assertEqual(client.post("/api/batches", json=payload, headers=headers).status_code, 500)
-                with patch.object(manager, "start", return_value={"id": "synthetic-batch"}) as start:
-                    self.assertEqual(client.post("/api/batches", json=payload, headers=headers).status_code, 202)
-                    extra = {"email": "three@example.com", "password": "synthetic-password"}
-                    self.assert_limited(client.post("/api/jobs", json=extra, headers=headers))
+                payload = {
+                    "accounts_text": "one@example.com----synthetic-password----JBSWY3DPEHPK3PXP\n"
+                    "two@example.com----synthetic-password----JBSWY3DPEHPK3PXP"
+                }
+                manager = workspace_for(app, client).batches
+                with patch.object(
+                    type(manager), "start", side_effect=OSError("synthetic failure")
+                ):
+                    self.assertEqual(
+                        client.post(
+                            "/api/batches",
+                            json=payload,
+                            headers=browser_headers(app, client),
+                        ).status_code,
+                        500,
+                    )
+                with patch.object(
+                    type(manager), "start", return_value={"id": "synthetic-batch"}
+                ) as start:
+                    self.assertEqual(
+                        client.post(
+                            "/api/batches",
+                            json=payload,
+                            headers=browser_headers(app, client),
+                        ).status_code,
+                        202,
+                    )
+                    extra = {
+                        "email": "three@example.com",
+                        "password": "synthetic-password",
+                    }
+                    self.assert_limited(
+                        client.post(
+                            "/api/jobs",
+                            json=extra,
+                            headers=browser_headers(app, client),
+                        )
+                    )
                     self.assertEqual(start.call_count, 1)
 
     def test_cleared_forged_expired_and_header_ids_share_anonymous_fallback(self):
         for layer in ("device", "session"):
             for mode in ("cleared", "forged", "expired", "headers"):
                 with self.subTest(layer=layer, mode=mode):
-                    app, _headers = self.app(layered_policy(layer, requests=Quota(2, 60)))
-                    with patch("itsdangerous.timed.time.time", return_value=2_000_000_000):
+                    app, _headers = self.app(
+                        layered_policy(layer, requests=Quota(2, 60))
+                    )
+                    with patch(
+                        "itsdangerous.timed.time.time", return_value=2_000_000_000
+                    ):
                         client = self.browser(app)
                     if mode != "expired":
                         for name in (DEVICE_COOKIE, SESSION_COOKIE):
                             client.delete_cookie(name)
                             if mode == "forged":
                                 client.set_cookie(name, "attacker-generated-cookie")
-                    now = 2_000_000_000 + (DEVICE_MAX_AGE + 1 if mode == "expired" else 0)
+                    now = 2_000_000_000 + (
+                        DEVICE_MAX_AGE + 1 if mode == "expired" else 0
+                    )
                     with patch("itsdangerous.timed.time.time", return_value=now):
                         for number, expected in ((1, 200), (2, 429), (3, 429)):
-                            headers = {"X-Device-ID": f"device-{number}", "X-Session-ID": f"session-{number}",
-                                       "X-Forwarded-For": f"203.0.113.{number}"} if mode == "headers" else {}
-                            response = client.get("/health", headers=headers)
+                            headers = (
+                                {
+                                    "X-Device-ID": f"device-{number}",
+                                    "X-Session-ID": f"session-{number}",
+                                    "X-Forwarded-For": f"203.0.113.{number}",
+                                }
+                                if mode == "headers"
+                                else {}
+                            )
+                            response = client.get(
+                                "/health", headers=browser_headers(app, client)
+                            )
                             self.assertEqual(response.status_code, expected)
                             self.assertFalse(response.headers.getlist("Set-Cookie"))
 

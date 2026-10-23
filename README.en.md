@@ -25,10 +25,10 @@ git clone https://github.com/d100000/chatGPT2RT-AT.git
 cd chatGPT2RT-AT
 python3 -m venv .venv
 .venv/bin/python -m pip install '.[web]'
-.venv/bin/python -m rt_extractor.web --port 8765 --output-dir output
+.venv/bin/python -m rt_extractor.web --port 8765
 ```
 
-Open [http://127.0.0.1:8765](http://127.0.0.1:8765). The three workbench routes are `/` for token extraction, `/converter` for file conversion and `/network` for IP diagnostics. The server binds to loopback and checks Host, Origin and CSRF. It does not provide public user authentication or tenant isolation.
+Open [http://127.0.0.1:8765](http://127.0.0.1:8765). The three workbench routes are `/` for token extraction, `/converter` for file conversion and `/network` for IP diagnostics. The server binds to loopback and checks Host, Origin and session-bound CSRF. Signed browser sessions own separate workspaces; this is not a public user login or administrator system.
 
 On Windows, create the environment with `python -m venv .venv` and replace `.venv/bin/python` with `.venv\Scripts\python.exe`.
 
@@ -86,15 +86,20 @@ asyncio.run(main())
 | Data or operation | Actual behavior |
 | --- | --- |
 | Imported conversion JSON | Parsed in page memory; authentication contents are not uploaded or written to browser storage |
-| Token extraction | Credentials pass through the device running the Python service. Results are saved there as plaintext JSON; for a server deployment, this means the server |
+| Web token extraction | Credentials and results are processed temporarily in server memory. Results are handed to the owning browser; no token, account-history or result files are written by the web service |
 | Passwords and 2FA secrets | Not stored in browser persistence or included in result files; a user-created input file still contains its own secrets |
-| Result files | Atomic writes with POSIX `0600` permissions; files remain after browser closure or service restart |
+| Browser result cache | Owner-scoped `localStorage`, valid for 30 minutes and shared by tabs in the same browser session. Web Locks coordinate receipt and clearing; unsupported/blocked storage has explicit fallback limits. Downloads are generated in the browser |
+| Server handoff | Successful browser receipt is acknowledged and clears the temporary result; uncollected terminal tasks expire after 10 minutes. Idle active workspaces are cancelled after 10 minutes |
+| CLI result files | Explicit `--output` / Python save calls still write plaintext JSON atomically with POSIX `0600` permissions |
+| Workspace isolation | Every task operation checks the signed browser session. Another session receives 404 even with a known task ID; missing or forged session cookies are rejected |
 | Conversion capacity | Up to 1,000 files/accounts, 2 MiB per document and 20 MiB total |
 | Abuse prevention | IP, anonymous browser device, session, account and global quotas; HTTP 429 includes a retry delay |
 | Device identification | Signed anonymous cookies, not hardware fingerprints; quota state and signing keys reset when the process restarts |
 | Deployment | One process holds task state. Multiple independent workers do not share tasks or quotas |
 
 An AT expiration timestamp does not state the lifetime of RT. Tokens can be revoked by the issuing service, and a converted file is not a successful authentication test. See [security controls](SECURITY.md), the [token guide](docs/TOKEN-GUIDE.md), [FAQ](docs/FAQ.md) and [deployment/update notes](docs/MAINTAINERS.md).
+
+The browser cache contains full credentials, is readable by scripts on the same origin, and is not a permanent backup. Expired entries are removed while the page runs or on its next read; closing every tab does not schedule physical deletion from browser storage. Download needed results promptly and clear them after use. People sharing one browser profile also share its session identity; use separate profiles. Restarting the service cannot restore active logins or uncollected results. Legacy output files are no longer loaded by the web service and are not automatically deleted during an upgrade.
 
 ## Updating an existing installation
 
