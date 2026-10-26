@@ -119,7 +119,7 @@ import { getBrowserResults, collectBatchResults, isBatchCollected, resetResultCo
     byId('cancel-button').disabled = stopping || cancelRemaining > 0;
     byId('cancel-button').textContent = stopping ? '正在取消…' : cancelRemaining ? `${cancelRemaining} 秒后可取消` : '取消整批';
     const clear = byId('clear-browser-results');
-    if (clear) clear.disabled = clearing || submitting || (!cleanupRetry && !batch && !resultStore.read());
+    if (clear) clear.disabled = clearing || submitting || initializing;
     for (const entry of activeEntries.values()) updateCodeControls(entry);
   }
 
@@ -451,9 +451,9 @@ import { getBrowserResults, collectBatchResults, isBatchCollected, resetResultCo
     if (notice) notice.textContent = storageStatus.notice || '结果在本浏览器缓存中有效期为 30 分钟；页面运行或下次读取时清理过期缓存。服务器确认交接后即清除临时结果。';
     const clearButton = byId('clear-browser-results');
     if (clearButton) {
-      clearButton.disabled = clearing || submitting || (!cleanupRetry && !batch && !cached);
-      clearButton.textContent = clearing ? '正在清除…' : cleanupRetry ? '重试清理临时任务' : activeStates.has(batch?.status) ? '结束任务并清除' : '清除本浏览器结果';
-      clearButton.title = '清除本浏览器结果并结束本会话的临时任务，其他用户不受影响。';
+      clearButton.disabled = clearing || submitting || initializing;
+      clearButton.textContent = clearing ? '正在清空…' : cleanupRetry ? '重试清理临时任务' : activeStates.has(batch?.status) ? '结束任务并清空' : '清空结果';
+      clearButton.title = '清空本浏览器缓存并结束本会话的临时任务，其他用户不受影响。';
     }
     clearTimeout(expiryTimer);
     if (cached) expiryTimer = setTimeout(() => {

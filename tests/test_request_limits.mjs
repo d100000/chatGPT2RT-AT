@@ -246,6 +246,20 @@ test('refresh restores acknowledged browser results when the server current task
   assert.equal(page.byId('downloads').hidden, false);
   assert.match(page.byId('results-body').textContent, /synthetic@example.com/);
   assert.equal(page.byId('start-button').disabled, false);
+  assert.equal(page.byId('clear-browser-results').disabled, false);
+});
+
+test('clear-results stays visible and usable before any result is cached', async () => {
+  let deletes = 0;
+  const page = await uiPage('app.js', async (path, options) => {
+    if (options.method === 'DELETE') { deletes += 1; return response(200, {}); }
+    return response(200, { batch: null });
+  });
+  assert.equal(page.byId('clear-browser-results').disabled, false);
+  assert.equal(page.byId('clear-browser-results').textContent, '清空结果');
+  await page.byId('clear-browser-results').click();
+  assert.equal(deletes, 1);
+  assert.equal(page.byId('clear-browser-results').disabled, false);
 });
 
 test('explicit browser clear hides RT and removes cache before server workspace deletion', async () => {
@@ -284,5 +298,5 @@ test('failed server cleanup still clears local results and offers an explicit cl
   assert.equal(page.store.read(), null); assert.equal(page.byId('downloads').hidden, true);
   assert.match(page.byId('clear-browser-results').textContent, /重试清理/); assert.equal(page.byId('clear-browser-results').disabled, false);
   await page.byId('clear-browser-results').click(); assert.equal(deletes, 2);
-  assert.equal(page.byId('clear-browser-results').disabled, true); assert.equal(page.byId('form-error').hidden, true);
+  assert.equal(page.byId('clear-browser-results').disabled, false); assert.equal(page.byId('form-error').hidden, true);
 });

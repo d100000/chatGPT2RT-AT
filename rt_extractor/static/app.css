@@ -90,6 +90,8 @@ h3 { margin: 0; font-size: 13px; font-weight: 600; }
 .output-pane { border-left: 1px solid var(--rule); background: var(--subtle); }
 .section-heading { display: flex; align-items: center; justify-content: space-between; min-height: 27px; margin-bottom: var(--space-md); gap: var(--space-sm); }
 .section-caption { color: var(--muted); font-size: 11px; }
+.result-actions { display: flex; align-items: center; justify-content: flex-end; flex-wrap: wrap; gap: 8px; }
+.clear-results-button { min-height: 34px; padding: 0 11px; font-size: 11px; }
 fieldset { border: 0; margin: 0; padding: 0; min-width: 0; }
 .field { margin-bottom: var(--space-md); }
 label { display: block; font-size: 12px; font-weight: 550; margin-bottom: 8px; }
@@ -121,6 +123,8 @@ input:disabled, textarea:disabled, select:disabled { background: var(--canvas); 
 .button-primary:hover:not(:disabled) { background: var(--blue-hover); }
 .button-secondary { color: var(--muted); background: var(--paper); border-color: var(--rule); }
 .button-secondary:hover:not(:disabled) { background: var(--canvas); color: var(--ink); }
+.result-actions .clear-results-button { min-height: 38px; padding: 0 14px; color: var(--blue); background: var(--blue-soft); border-color: #a9bced; font-size: 12px; font-weight: 650; box-shadow: 0 1px 2px #002fa714; }
+.result-actions .clear-results-button:hover:not(:disabled) { color: var(--blue-hover); background: #e2eaff; border-color: var(--blue); }
 #start-button { flex: 1; justify-content: space-between; }
 .privacy-note { font-size: 10px; color: var(--muted); margin: 14px 0 0; line-height: 1.8; }
 .site-notice { margin-bottom: var(--space-md); padding: var(--space-sm) var(--space-md); border: 1px solid var(--rule); border-left: 3px solid var(--blue); border-radius: var(--control-radius); background: var(--paper); font-size: 12px; line-height: 1.8; }
