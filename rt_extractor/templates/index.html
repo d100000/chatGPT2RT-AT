@@ -7,6 +7,10 @@
 {% block scripts %}<script type="module" src="{{ url_for('static', filename='app.js') }}"></script>{% endblock %}
 {% block content %}
     <div class="page-heading"><div><p class="eyebrow">TOKEN EXTRACTION</p><h1>提取 GPT Token，一次获取 RT / AT</h1><p class="page-description">登录你已获授权的 ChatGPT 账号，提取 RT、AT 和 ID Token，并自动生成 CPA 与 Sub2API 认证文件。</p></div><span class="local-badge">已有账号登录</span></div>
+    <aside class="author-promotion" aria-label="作者广告">
+      <div class="promotion-copy"><span class="promotion-label">广告</span><p class="promotion-title">联系作者，超低价购买已接码 GPT 账号</p><p class="promotion-contact">欢迎加群咨询</p></div>
+      <p class="promotion-price">低至 <strong>0.4</strong><span> / 个</span></p>
+    </aside>
     {% include "privacy_notice.html" %}
     <ol class="workflow-strip" aria-label="Token 获取流程"><li><span>1</span>导入账号</li><li><span>2</span>完成登录验证</li><li><span>3</span>自动生成 CPA / Sub2API</li></ol>
     <div class="workbench">
