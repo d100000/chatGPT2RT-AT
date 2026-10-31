@@ -42,7 +42,7 @@ FORM: User-authorized reorganization of the existing workbench; compact navigati
     <div class="sidebar-foot"><span class="status-dot" aria-hidden="true"></span>会话隔离 · 结果由浏览器保管 <a href="/docs">使用文档</a></div>
   </aside>
   <div class="app-main">
-    <header class="shell-bar"><div class="shell-location"><span>bob ai工具</span><span aria-hidden="true">/</span><strong>{% block tool_name %}{% endblock %}</strong></div><div class="connection" id="connection"><span class="status-dot" aria-hidden="true"></span><span id="connection-label">{% block connection_label %}本地工作空间{% endblock %}</span></div></header>
+    <header class="shell-bar"><div class="shell-location"><span>bob ai工具</span><span aria-hidden="true">/</span><strong>{% block tool_name %}{% endblock %}</strong></div><div class="shell-actions"><button id="site-notice-open" class="site-notice-trigger" type="button" aria-haspopup="dialog" aria-controls="site-notice-dialog">公告</button><div class="connection" id="connection"><span class="status-dot" aria-hidden="true"></span><span id="connection-label">{% block connection_label %}本地工作空间{% endblock %}</span></div></div></header>
     <main id="main-content" class="workspace {% block workspace_class %}{% endblock %}" tabindex="-1">{% block content %}{% endblock %}</main>
   </div>
   {% include "site_notice_dialog.html" %}

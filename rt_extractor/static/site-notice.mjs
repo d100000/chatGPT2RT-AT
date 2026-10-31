@@ -65,6 +65,7 @@ export function initSiteNotice({ documentRef = globalThis.document, windowRef = 
   const note = documentRef.getElementById('site-notice-storage-note');
   let previousFocus;
   let acknowledgementHandled = false;
+  let manuallyOpened = false;
 
   function remember() {
     const persistence = memory.acknowledge();
@@ -78,16 +79,17 @@ export function initSiteNotice({ documentRef = globalThis.document, windowRef = 
 
   function dismiss(rememberChoice = true) {
     if (!dialog.open) return;
-    if (rememberChoice) remember();
+    if (rememberChoice && !manuallyOpened) remember();
     else acknowledgementHandled = true;
     dialog.close();
   }
 
   dialog.addEventListener('close', () => {
-    if (!acknowledgementHandled) remember();
+    if (!acknowledgementHandled && !manuallyOpened) remember();
     const target = previousFocus?.isConnected && previousFocus !== documentRef.body
       ? previousFocus : documentRef.getElementById('main-content');
     target?.focus({ preventScroll: true });
+    manuallyOpened = false;
   });
   dialog.addEventListener('cancel', (event) => { event.preventDefault(); dismiss(); });
   for (const id of ['site-notice-confirm', 'site-notice-close']) {
@@ -97,10 +99,10 @@ export function initSiteNotice({ documentRef = globalThis.document, windowRef = 
   // Acknowledging in another tab closes an existing notice without extending its
   // seven-day period or interrupting any other dialog on the page.
   windowRef?.addEventListener('storage', (event) => {
-    if (event.key === NOTICE_STORAGE_KEY && !noticeIsDue(event.newValue, now())) dismiss(false);
+    if (!manuallyOpened && event.key === NOTICE_STORAGE_KEY && !noticeIsDue(event.newValue, now())) dismiss(false);
   });
   documentRef.addEventListener('visibilitychange', () => {
-    if (documentRef.visibilityState === 'visible' && dialog.open && !memory.isDue()) dismiss(false);
+    if (!manuallyOpened && documentRef.visibilityState === 'visible' && dialog.open && !memory.isDue()) dismiss(false);
   });
 
   const copyButton = documentRef.getElementById('site-notice-copy-group');
@@ -116,14 +118,24 @@ export function initSiteNotice({ documentRef = globalThis.document, windowRef = 
     } finally { copyButton.disabled = false; }
   });
 
-  function showInitialNotice() {
-    if (!memory.isDue() || dialog.open) return;
-    previousFocus = documentRef.activeElement;
-    acknowledgementHandled = false;
+  function openNotice(source = documentRef.activeElement, automatic = false) {
+    if (dialog.open || documentRef.querySelector('dialog[open]')) return false;
+    previousFocus = source;
+    manuallyOpened = !automatic;
+    acknowledgementHandled = manuallyOpened;
     dialog.showModal();
+    return true;
   }
 
-  const controller = { dismiss, isDue: () => memory.isDue() };
+  for (const id of ['site-notice-open', 'site-notice-promotions-open']) {
+    documentRef.getElementById(id)?.addEventListener('click', (event) => openNotice(event.currentTarget));
+  }
+
+  function showInitialNotice() {
+    if (memory.isDue()) openNotice(documentRef.activeElement, true);
+  }
+
+  const controller = { dismiss, open: (source) => openNotice(source), isDue: () => memory.isDue() };
   initialized.set(dialog, controller);
   // Do not stack this announcement over an existing credentials dialog.
   if (documentRef.querySelector('dialog[open]')) {

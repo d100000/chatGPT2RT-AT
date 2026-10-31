@@ -90,7 +90,7 @@ function page({ localStorage = storage(), sessionStorage = storage(), now = () =
     close() { this.open = false; this.dispatchEvent(new Event('close')); }
     click() { this.dispatchEvent(new Event('click')); }
   }
-  const ids = Object.fromEntries(['site-notice-dialog', 'site-notice-confirm', 'site-notice-close', 'site-notice-storage-note', 'site-notice-copy-group', 'site-notice-copy-status', 'main-content'].map((id) => [id, new Element()]));
+  const ids = Object.fromEntries(['site-notice-dialog', 'site-notice-confirm', 'site-notice-close', 'site-notice-storage-note', 'site-notice-copy-group', 'site-notice-copy-status', 'site-notice-open', 'site-notice-promotions-open', 'main-content'].map((id) => [id, new Element()]));
   const documentRef = Object.assign(new Target(), {
     body: new Element(), visibilityState: 'visible',
     getElementById: (id) => ids[id] ?? null,
@@ -174,4 +174,48 @@ test('initializing the same dialog twice does not register duplicate handlers', 
   assert.equal(initSiteNotice({ documentRef: current.documentRef, windowRef: current.windowRef, now: () => NOW }), current.controller);
   current.ids['site-notice-close'].click();
   assert.equal(current.ids['main-content'].focusCalls, 1);
+});
+
+test('both announcement buttons open an acknowledged notice and restore their focus without extending the seven-day period', () => {
+  const acknowledgedAt = NOW - 1000;
+  for (const id of ['site-notice-open', 'site-notice-promotions-open']) {
+    const current = page({ localStorage: storage(String(acknowledgedAt)) });
+    const dialog = current.ids['site-notice-dialog'];
+    assert.equal(dialog.open, false);
+    current.ids[id].click();
+    assert.equal(dialog.open, true);
+    current.documentRef.dispatchEvent(new Event('visibilitychange'));
+    assert.equal(dialog.open, true, 'Returning to a manually opened notice must not dismiss it');
+    current.ids['site-notice-close'].click();
+    assert.equal(dialog.open, false);
+    assert.equal(current.ids[id].focusCalls, 1);
+    assert.equal(current.localStorage.getItem(NOTICE_STORAGE_KEY), String(acknowledgedAt));
+  }
+});
+
+test('a dismissed automatic notice can be reopened manually and Escape leaves its original timestamp intact', () => {
+  let currentTime = NOW;
+  const current = page({ now: () => currentTime });
+  current.ids['site-notice-confirm'].click();
+  assert.equal(current.localStorage.getItem(NOTICE_STORAGE_KEY), String(NOW));
+  currentTime += 2000;
+  current.ids['site-notice-promotions-open'].click();
+  assert.equal(current.ids['site-notice-dialog'].open, true);
+  current.ids['site-notice-dialog'].dispatchEvent(new Event('cancel', { cancelable: true }));
+  assert.equal(current.ids['site-notice-dialog'].open, false);
+  assert.equal(current.ids['site-notice-promotions-open'].focusCalls, 1);
+  assert.equal(current.localStorage.getItem(NOTICE_STORAGE_KEY), String(NOW));
+});
+
+test('manual announcement opening never stacks over another credentials dialog', () => {
+  const current = page({ localStorage: storage(String(NOW)) });
+  current.documentRef.querySelector = () => ({ open: true });
+  assert.equal(current.controller.open(current.ids['site-notice-open']), false);
+  current.ids['site-notice-promotions-open'].click();
+  assert.equal(current.ids['site-notice-dialog'].open, false);
+  assert.equal(current.localStorage.getItem(NOTICE_STORAGE_KEY), String(NOW));
+  current.documentRef.querySelector = () => null;
+  assert.equal(current.controller.open(current.ids['site-notice-open']), true);
+  current.controller.dismiss();
+  assert.equal(current.ids['site-notice-open'].focusCalls, 1);
 });

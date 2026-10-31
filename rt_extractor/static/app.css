@@ -5,8 +5,6 @@
   --success: #207451; --success-soft: #eaf5ef;
   --error: #ac3444; --error-soft: #fff1f3;
   --warning: #8d5c13; --warning-soft: #fff5e2;
-  --promotion-bg: #fff7e8; --promotion-rule: #ebcf97;
-  --promotion-ink: #704411; --promotion-accent: #a53c16;
   --body: -apple-system, BlinkMacSystemFont, "PingFang SC", "Microsoft YaHei", sans-serif;
   --mono: "SFMono-Regular", Consolas, "Liberation Mono", monospace;
   --sidebar-width: 228px; --shell-height: 65px; --content-max: 1420px;
@@ -84,18 +82,24 @@ h2 { margin: 0; font-size: 15px; font-weight: 650; }
 h3 { margin: 0; font-size: 13px; font-weight: 600; }
 .page-description { margin: 9px 0 0; color: var(--muted); font-size: 13px; max-width: 70ch; }
 .local-badge { flex-shrink: 0; padding: 5px 10px; border: 1px solid var(--rule); border-radius: 5px; font-size: 11px; color: var(--muted); background: var(--paper); }
-.author-promotion { display: flex; align-items: center; justify-content: space-between; gap: 18px; margin-bottom: 24px; padding: 18px 22px; border: 1px solid var(--promotion-rule); border-left: 4px solid var(--promotion-accent); border-radius: 8px; background: var(--promotion-bg); color: var(--promotion-ink); }
-.promotion-copy { min-width: 0; }
-.promotion-label { display: inline-block; margin-bottom: 5px; padding: 1px 6px; border: 1px solid var(--promotion-rule); border-radius: 3px; font-size: 10px; }
-.promotion-title { margin: 0; font-size: 16px; font-weight: 650; overflow-wrap: anywhere; }
-.promotion-contact { margin: 5px 0 0; font-size: 13px; }
-.promotion-price { flex-shrink: 0; margin: 0; color: var(--promotion-accent); font-size: 13px; white-space: nowrap; }
-.promotion-price strong { font: 700 34px/1.2 var(--mono); }
-.promotion-price span { color: var(--promotion-ink); }
-.bob-promotion { --promotion-bg: var(--blue-soft); --promotion-rule: #c6d5fa; --promotion-ink: #243d75; --promotion-accent: var(--blue); }
-.bob-promotion .promotion-title { color: var(--blue); }
-.promotion-description { margin: 6px 0 0; font-size: 13px; line-height: 1.8; overflow-wrap: anywhere; }
-@media (max-width: 600px) { .author-promotion { align-items: flex-start; flex-direction: column; gap: 12px; padding: 16px 18px; } .promotion-title { font-size: 15px; } .promotion-price strong { font-size: 30px; } }
+.author-services { margin-bottom: 20px; padding: 12px 18px 16px; border: 1px solid var(--rule); border-radius: 8px; background: var(--paper); }
+.author-services-heading { display: flex; align-items: center; justify-content: space-between; flex-wrap: wrap; gap: 6px 12px; margin-bottom: 6px; }
+.author-services-label { display: flex; align-items: center; gap: 8px; color: var(--muted); }
+.author-services-label p { margin: 0; font-size: 11px; }
+.promotion-label { padding: 0 5px; border: 1px solid var(--rule); border-radius: 3px; font-size: 10px; line-height: 1.8; }
+.promotion-details, .site-notice-trigger { display: inline-flex; align-items: center; justify-content: center; gap: 5px; min-height: 32px; border: 0; padding: 3px 0; color: var(--blue); background: transparent; font-size: 11px; white-space: nowrap; }
+.promotion-details:hover, .site-notice-trigger:hover { text-decoration: underline; }
+.author-services-list { display: grid; grid-template-columns: minmax(0, .9fr) minmax(0, 1.1fr); gap: 18px; }
+.author-service { min-width: 0; }
+.author-service + .author-service { border-left: 1px solid var(--rule); padding-left: 18px; }
+.author-service h2 { display: flex; align-items: baseline; flex-wrap: wrap; gap: 4px 10px; margin: 0; font-size: 13px; font-weight: 600; line-height: 1.7; }
+.author-service p { margin: 5px 0 0; color: var(--muted); font-size: 12px; line-height: 1.75; overflow-wrap: anywhere; }
+.promotion-price { color: var(--muted); font-size: 11px; font-weight: 400; white-space: nowrap; }
+.promotion-price strong { color: var(--ink); font: 600 16px var(--mono); }
+.shell-actions, .topbar-actions { display: flex; align-items: center; flex-wrap: wrap; justify-content: flex-end; gap: 8px 18px; }
+.site-notice-service { margin-top: 12px; }
+.site-notice-service h4 { margin: 0; color: var(--ink); font-size: 13px; font-weight: 600; }
+@media (max-width: 760px) { .author-services { padding: 10px 14px 14px; } .author-services-list { grid-template-columns: minmax(0, 1fr); gap: 12px; } .author-service + .author-service { border-left: 0; border-top: 1px solid var(--rule); padding: 12px 0 0; } .shell-actions, .topbar-actions { gap: 6px 12px; } }
 .workflow-strip { display: flex; align-items: center; gap: var(--space-xl); list-style: none; padding: 0 0 var(--space-md); margin: 0 0 var(--space-md); border-bottom: 1px solid var(--rule); }
 .workflow-strip li { display: flex; align-items: center; gap: 8px; color: var(--muted); font-size: 12px; }
 .workflow-strip li span { display: inline-flex; align-items: center; justify-content: center; width: 23px; height: 23px; flex-shrink: 0; color: var(--blue); font: 550 11px var(--mono); background: var(--blue-soft); border-radius: 50%; }
