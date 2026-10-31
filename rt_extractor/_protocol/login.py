@@ -16,7 +16,7 @@ from typing import Any, Awaitable, Callable
 from urllib.parse import parse_qs, urlencode, urljoin, urlsplit
 
 from .http_client import AUTH_BASE, build_client, json_headers, nav_headers, request_with_retry
-from .errors import ProtocolError, RateLimitedError, raise_for_rate_limit
+from .errors import ProtocolError, RateLimitedError, raise_for_forbidden, raise_for_rate_limit
 from .pkce import new_device_id, new_pkce, random_state_nonce
 from .profile import random_profile
 from .sentinel import SentinelGenerator
@@ -131,6 +131,7 @@ def _next_url(payload: dict[str, Any], response: Any = None, *, base: str = AUTH
 
 def _check_status(response: Any, stage: str, *, redirects: bool = False) -> None:
     raise_for_rate_limit(response)
+    raise_for_forbidden(response, stage)
     allowed = (200, 201, 204, 301, 302, 303, 307, 308) if redirects else (200, 201, 204)
     if response.status_code not in allowed:
         raise ProtocolError(f"{stage}失败（HTTP {response.status_code}）")
@@ -266,6 +267,7 @@ async def _consent_next(
             headers=nav_headers(profile, device_id, site="same-origin"),
             follow_redirects=False, retries=1,
         )
+        raise_for_forbidden(response, "工作区授权")
         if response.status_code == 200:
             workspace = _workspace_id(_body(response))
     if workspace:

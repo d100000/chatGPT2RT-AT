@@ -12,6 +12,18 @@ class ProtocolError(RuntimeError):
     """A safe error message, never containing credentials or response bodies."""
 
 
+class ForbiddenError(ProtocolError):
+    def __init__(self, stage: str) -> None:
+        super().__init__(
+            f"{stage}失败（HTTP 403）：账号可能需要接码（手机号验证），请完成验证后重试。"
+        )
+
+
+def raise_for_forbidden(response: Any, stage: str) -> None:
+    if response.status_code == 403:
+        raise ForbiddenError(stage)
+
+
 class RateLimitedError(ProtocolError):
     def __init__(self, retry_after: float = 30) -> None:
         try:

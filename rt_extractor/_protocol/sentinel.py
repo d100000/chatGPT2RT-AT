@@ -23,7 +23,7 @@ from typing import Any, Optional
 import httpx
 
 from .pkce import new_device_id
-from .errors import RateLimitedError, raise_for_rate_limit
+from .errors import ForbiddenError, RateLimitedError, raise_for_forbidden, raise_for_rate_limit
 
 logger = logging.getLogger(__name__)
 
@@ -273,13 +273,13 @@ class SentinelGenerator:
         """
         try:
             return await self._build_sentinel(client, flow)
-        except RateLimitedError:
+        except (ForbiddenError, RateLimitedError):
             raise
         except Exception as e:
             logger.warning("sentinel/req failed; retrying")
             try:
                 return await self._build_sentinel(client, flow)
-            except RateLimitedError:
+            except (ForbiddenError, RateLimitedError):
                 raise
             except Exception as e2:
                 logger.warning(
@@ -311,6 +311,7 @@ class SentinelGenerator:
             follow_redirects=False,
         )
         raise_for_rate_limit(resp)
+        raise_for_forbidden(resp, "认证检查")
         if resp.status_code != 200:
             raise RuntimeError(
                 f"sentinel/req HTTP {resp.status_code}"
