@@ -1,7 +1,14 @@
-<section class="site-notice" aria-label="开源、隐私声明与作者联系">
-  <p class="site-notice-privacy"><strong>开源与隐私声明：</strong>代码完全开源。网页结果仅缓存在当前浏览器会话中，服务器不写入 Token、账号历史或结果文件。登录时服务器仅临时处理凭据与结果，浏览器接收后清除临时结果；密码和 2FA 密钥不写入浏览器缓存。{% if active_page == 'converter' %}手动导入的认证文件仅在浏览器内存中转换，不上传服务器。{% endif %}</p>
-  <div class="site-notice-footer">
-    <p class="site-notice-brand"><strong>Bob AI</strong><span>只做最靠谱的 AI。</span></p>
-    <p class="site-notice-contact"><span>有任何疑问，请联系作者：<a href="mailto:bbo_dong@qq.com">bbo_dong@qq.com</a></span><span>或加入社群：QQ群 <strong>916444032</strong></span></p>
+<details class="site-notice site-notice-disclosure">
+  <summary class="site-notice-summary-line">
+    <span class="site-notice-summary-text">代码开源 · 结果临时缓存</span>
+    <span class="site-notice-summary-action">隐私与开源说明 <svg viewBox="0 0 24 24" aria-hidden="true"><path d="m6 9 6 6 6-6"/></svg></span>
+  </summary>
+  <div class="site-notice-body">
+    <p class="site-notice-privacy"><strong>数据与隐私：</strong>网页任务按浏览器会话隔离。Token 结果仅缓存在当前浏览器会话中，有效期为 30 分钟，页面运行或下次读取时清除过期缓存。服务器仅在登录和结果交接期间临时处理凭据与结果，不写入 Token、账号历史或结果文件；浏览器接收后通知服务器清除临时结果，未接收结果会自动过期。密码和 2FA 密钥不写入浏览器缓存，请及时下载结果并主动清理。</p>
+    <p>手动导入的认证文件仅在浏览器内存中转换，不上传服务器。匿名 Cookie 用于会话隔离和频率控制，不含账号或 Token，不采集硬件指纹。</p>
+    <p><strong>开源与独立性：</strong>项目代码公开，可在 <a href="https://github.com/d100000/chatGPT2RT-AT" target="_blank" rel="noopener noreferrer">GitHub 查看源码</a>并反馈问题。这是独立开发的非官方工具，与 OpenAI 无隶属或背书关系。</p>
+    <div class="site-notice-footer">
+      <p class="site-notice-contact"><span>联系作者：<a href="mailto:bbo_dong@qq.com">bbo_dong@qq.com</a></span><span>QQ群 <strong>916444032</strong></span></p>
+    </div>
   </div>
-</section>
+</details>

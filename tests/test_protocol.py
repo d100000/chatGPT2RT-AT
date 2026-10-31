@@ -13,6 +13,7 @@ from urllib.parse import parse_qs
 import httpx
 
 from rt_extractor._protocol import http_client, login
+from rt_extractor._protocol.errors import ForbiddenError
 from rt_extractor._protocol.profile import random_profile
 from rt_extractor._protocol.sentinel import SentinelResult
 from rt_extractor._protocol.totp import generate_totp, normalize_totp_secret
@@ -311,11 +312,47 @@ class LoginFlowTests(unittest.IsolatedAsyncioTestCase):
         scenario.overrides[("POST", "/api/accounts/password/verify")] = lambda r: httpx.Response(
             403, json={"password": PASSWORD, "token": "synthetic-sensitive-response"},
         )
-        with self.assertRaises(login.ProtocolError) as error:
+        with self.assertRaises(ForbiddenError) as error:
             await self.run_scenario(scenario, totp_secret=SECRET)
         self.assertNotIn(PASSWORD, str(error.exception))
         self.assertNotIn("synthetic-sensitive-response", str(error.exception))
-        self.assertIn("403", str(error.exception))
+        self.assertIn("HTTP 403", str(error.exception))
+        self.assertIn("账号可能需要", str(error.exception))
+        self.assertNotIn("/oauth/token", scenario.paths)
+
+    async def test_navigation_and_token_exchange_forbidden_keep_account_hint(self):
+        for method, path in [("GET", "/api/accounts/authorize"), ("POST", "/oauth/token")]:
+            with self.subTest(method=method, path=path):
+                scenario = Scenario()
+                scenario.authorize_target = lambda current: current.callback
+                scenario.overrides[(method, path)] = lambda request: httpx.Response(
+                    403, json={"password": PASSWORD, "token": "synthetic-sensitive-response"},
+                )
+                with self.assertRaises(ForbiddenError) as error:
+                    await self.run_scenario(scenario)
+                message = str(error.exception)
+                self.assertIn("HTTP 403", message)
+                self.assertIn("账号可能需要", message)
+                self.assertNotIn(PASSWORD, message)
+                self.assertNotIn("synthetic-sensitive-response", message)
+                self.assertEqual(scenario.paths[-1], path)
+
+    async def test_consent_session_forbidden_is_not_hidden_by_oauth_fallback(self):
+        scenario = Scenario()
+        scenario.overrides[("GET", "/sign-in-with-chatgpt/codex/consent")] = lambda request: httpx.Response(
+            200, text="synthetic consent page without workspace cookie",
+        )
+        scenario.overrides[("GET", "/api/accounts/client_auth_session_dump")] = lambda request: httpx.Response(
+            403, json={"token": "synthetic-sensitive-response"},
+        )
+        with self.assertRaises(ForbiddenError) as error:
+            await self.run_scenario(scenario, totp_secret=SECRET)
+        message = str(error.exception)
+        self.assertIn("HTTP 403", message)
+        self.assertIn("账号可能需要", message)
+        self.assertNotIn("synthetic-sensitive-response", message)
+        self.assertNotIn("/api/oauth/oauth2/auth", scenario.paths)
+        self.assertNotIn("/oauth/token", scenario.paths)
 
 
 if __name__ == "__main__":

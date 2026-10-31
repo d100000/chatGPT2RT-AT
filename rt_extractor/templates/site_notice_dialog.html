@@ -3,23 +3,24 @@
     <div><p class="eyebrow">BOB AI · 公告</p><h2 id="site-notice-title" tabindex="-1" autofocus>欢迎使用 bob ai工具</h2></div>
     <button id="site-notice-close" class="icon-button" type="button" aria-label="关闭公告"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="m6 6 12 12M18 6 6 18"/></svg></button>
   </div>
-  <p id="site-notice-summary" class="site-notice-summary">数据处理、开源信息与作者服务。</p>
+  <p id="site-notice-summary" class="site-notice-summary">源码公开，网页结果仅在当前浏览器临时缓存。详细说明可按需展开。</p>
   <div class="site-notice-items">
-    <section class="site-notice-item" aria-labelledby="site-notice-privacy-title">
+    <details class="site-notice-item site-notice-disclosure">
+      <summary class="site-notice-summary-line"><span class="site-notice-summary-text">开源与隐私说明</span><span class="site-notice-summary-action">完整声明 <svg viewBox="0 0 24 24" aria-hidden="true"><path d="m6 9 6 6 6-6"/></svg></span></summary>
+      <div class="site-notice-body">
       <h3 id="site-notice-privacy-title">数据与隐私</h3>
       <p>网页任务按浏览器会话隔离，Token 结果仅缓存在当前浏览器会话中。服务器仅在登录和结果交接期间临时使用内存，不写入 Token、账号历史或结果文件。</p>
       <p class="site-notice-retention">浏览器接收结果后会通知服务器清除临时结果，未接收结果会自动过期。浏览器缓存有效期 30 分钟，页面运行或下次读取时清除过期缓存。密码和 2FA 密钥不写入浏览器缓存，请及时下载结果并主动清理。</p>
       <p>手动导入的格式转换文件仅在浏览器内存中处理，不上传服务器。匿名 Cookie 用于会话隔离和频率控制，不含账号或 Token，不采集硬件指纹。</p>
-    </section>
-    <section class="site-notice-item" aria-labelledby="site-notice-source-title">
       <h3 id="site-notice-source-title">代码完全开源</h3>
       <p>源码公开，欢迎查阅、反馈问题与参与改进。</p>
       <a class="site-notice-source" href="https://github.com/d100000/chatGPT2RT-AT" target="_blank" rel="noopener noreferrer">在 GitHub 查看源码 <span aria-hidden="true">↗</span></a>
-    </section>
+      </div>
+    </details>
     <section class="site-notice-item" aria-labelledby="site-notice-services-title">
-      <h3 id="site-notice-services-title">作者服务 · 广告</h3>
-      <div class="site-notice-service"><h4>已接码 GPT 账号</h4><p>联系作者，超低价购买已接码 GPT 账号，低至 0.4 / 个。欢迎加群咨询。</p></div>
-      <div class="site-notice-service"><h4>BobAI · 作者运营的 AI 服务站点</h4><p>只做靠谱的 AI。Codex 不降质及国模，全天 24 小时 AI 智能监控，企业级别的 SLA 保证。请求成功率全网最高。欢迎加群测试。</p></div>
+      <h3 id="site-notice-services-title">BOB AI 优惠专区 · 广告</h3>
+      <div class="site-notice-service"><h4>已接码 GPT Free 账号 · 最低 ¥0.40 / 个</h4><p>已完成接码，按需选购。</p></div>
+      <div class="site-notice-service"><h4>BobAI · GPT 中转站 · 低至 ¥0.20 / $1 API 额度</h4><p>GPT 不降质，为稳定调用而来。作者运营，欢迎加群咨询优惠。</p></div>
     </section>
     <section class="site-notice-item" aria-labelledby="site-notice-community-title">
       <h3 id="site-notice-community-title">欢迎加入 QQ 群讨论</h3>

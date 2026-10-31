@@ -24,7 +24,7 @@
             <details class="advanced"><summary>连接设置<span>可选</span></summary><div class="field"><label for="proxy">统一代理地址</label><input id="proxy" name="proxy" type="text" autocomplete="off" spellcheck="false" placeholder="http://127.0.0.1:7890"><p class="field-help">应用于本批次所有账号；留空使用直连。</p></div></details>
           </fieldset>
           <div id="form-error" class="notice notice-error" role="alert" hidden><p id="form-error-message"></p><ul id="validation-errors" hidden></ul></div>
-          <div class="form-actions"><button id="start-button" class="button button-primary" type="submit" disabled><span id="start-label">开始批量提取</span><span aria-hidden="true">→</span></button><button id="cancel-button" class="button button-secondary" type="button" hidden>取消整批</button></div>
+          <div class="form-actions"><button id="start-button" class="button button-primary" type="submit" aria-haspopup="dialog" aria-controls="proxy-confirm-dialog" disabled><span id="start-label">开始批量提取</span><span aria-hidden="true">→</span></button><button id="cancel-button" class="button button-secondary" type="button" hidden>取消整批</button></div>
           <p class="privacy-note">提交成功后自动清空输入，密码和密钥不写入浏览器存储。</p>
         </form>
       </section>
@@ -42,6 +42,19 @@
     <footer class="workspace-footer"><span>完整 Token · CPA · Sub2API</span><span>遇到额外验证时，请在对应账号下输入验证码</span></footer>
   {% endblock %}
 {% block dialogs %}
+  <dialog id="proxy-confirm-dialog" class="rt-dialog proxy-confirm-dialog" aria-labelledby="proxy-confirm-title" aria-describedby="proxy-confirm-description">
+    <form method="dialog">
+      <div class="site-notice-heading">
+        <h2 id="proxy-confirm-title" tabindex="-1" autofocus>获取前确认代理</h2>
+        <button class="icon-button" type="submit" value="cancel" aria-label="取消获取"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="m6 6 12 12M18 6 6 18"/></svg></button>
+      </div>
+      <p id="proxy-confirm-description" class="site-notice-summary">当前未填写代理，将使用直连获取 Token。是否需要先添加代理？</p>
+      <div class="rt-view-actions">
+        <button id="proxy-confirm-edit" class="button button-secondary" type="submit" value="edit">先添加代理</button>
+        <button id="proxy-confirm-start" class="button button-primary" type="submit" value="start">不添加，继续获取</button>
+      </div>
+    </form>
+  </dialog>
   <dialog id="rt-dialog" class="rt-dialog" aria-labelledby="rt-view-title" aria-describedby="rt-view-email rt-view-help">
     <h2 id="rt-view-title">查看账号 RT</h2>
     <p id="rt-view-email" class="rt-view-email"></p>

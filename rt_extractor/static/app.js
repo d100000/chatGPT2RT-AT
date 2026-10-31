@@ -13,6 +13,7 @@ import { getBrowserResults, collectBatchResults, isBatchCollected, resetResultCo
   let batch = null;
   let initializing = true;
   let submitting = false;
+  let confirmingProxy = false;
   let importing = false;
   let cancelling = false;
   let pollTimer = null;
@@ -108,7 +109,7 @@ import { getBrowserResults, collectBatchResults, isBatchCollected, resetResultCo
   function updateControls() {
     const active = !!batch && activeStates.has(batch.status);
     const stopping = cancelling || batch?.status === 'cancelling';
-    const busy = active || submitting || importing || initializing || clearing;
+    const busy = active || submitting || confirmingProxy || importing || initializing || clearing;
     byId('credentials-fields').disabled = busy;
     byId('clear-accounts-button').disabled = busy || (!byId('accounts-text').value && !byId('file-name').textContent);
     const submitRemaining = cooldowns.remaining('submit');
@@ -119,8 +120,47 @@ import { getBrowserResults, collectBatchResults, isBatchCollected, resetResultCo
     byId('cancel-button').disabled = stopping || cancelRemaining > 0;
     byId('cancel-button').textContent = stopping ? '正在取消…' : cancelRemaining ? `${cancelRemaining} 秒后可取消` : '取消整批';
     const clear = byId('clear-browser-results');
-    if (clear) clear.disabled = clearing || submitting || initializing;
+    if (clear) clear.disabled = clearing || submitting || confirmingProxy || initializing;
     for (const entry of activeEntries.values()) updateCodeControls(entry);
+  }
+
+  function canSubmitBatch() {
+    return !submitting && !confirmingProxy && !importing && !initializing && !clearing
+      && !cooldowns.remaining('submit') && !(batch && activeStates.has(batch.status));
+  }
+
+  async function confirmProxy() {
+    const dialog = byId('proxy-confirm-dialog');
+    if (document.querySelector('dialog[open]')) return false;
+    const hasProxy = !!byId('proxy').value.trim();
+    byId('proxy-confirm-description').textContent = hasProxy
+      ? '已填写代理，本批次将通过该代理获取 Token。你可以修改代理，或确认后开始获取。'
+      : '当前未填写代理，将使用直连获取 Token。是否需要先添加代理？';
+    byId('proxy-confirm-edit').textContent = hasProxy ? '修改代理' : '先添加代理';
+    byId('proxy-confirm-start').textContent = hasProxy ? '确认并开始' : '不添加，继续获取';
+    dialog.returnValue = 'cancel';
+    confirmingProxy = true;
+    updateControls();
+    let onClose;
+    let choice;
+    try {
+      choice = await new Promise((resolve) => {
+        onClose = () => resolve(dialog.returnValue);
+        dialog.addEventListener('close', onClose, { once: true });
+        dialog.showModal();
+      });
+    } catch (_) {
+      showError('无法打开代理确认，请刷新页面后重试。');
+    } finally {
+      dialog.removeEventListener('close', onClose);
+      confirmingProxy = false;
+      updateControls();
+    }
+    if (choice === 'edit') {
+      byId('proxy').closest('details').open = true;
+      byId('proxy').focus();
+    } else byId('start-button').focus({ preventScroll: true });
+    return choice === 'start';
   }
 
   function updateCodeControls(entry) {
@@ -451,7 +491,7 @@ import { getBrowserResults, collectBatchResults, isBatchCollected, resetResultCo
     if (notice) notice.textContent = storageStatus.notice || '结果在本浏览器缓存中有效期为 30 分钟；页面运行或下次读取时清理过期缓存。服务器确认交接后即清除临时结果。';
     const clearButton = byId('clear-browser-results');
     if (clearButton) {
-      clearButton.disabled = clearing || submitting || initializing;
+      clearButton.disabled = clearing || submitting || confirmingProxy || initializing;
       clearButton.textContent = clearing ? '正在清空…' : cleanupRetry ? '重试清理临时任务' : activeStates.has(batch?.status) ? '结束任务并清空' : '清空结果';
       clearButton.title = '清空本浏览器缓存并结束本会话的临时任务，其他用户不受影响。';
     }
@@ -578,13 +618,15 @@ import { getBrowserResults, collectBatchResults, isBatchCollected, resetResultCo
 
   byId('batch-form').addEventListener('submit', async (event) => {
     event.preventDefault();
-    if (submitting || importing || initializing || cooldowns.remaining('submit') || (batch && activeStates.has(batch.status))) return;
+    if (!canSubmitBatch()) return;
     const count = inputCount();
     if (!count) { showError('请粘贴账号列表或导入 .txt 文件。'); return; }
     if (count > maxAccounts) { showError('每批最多 1,000 条账号，请拆分后提交。'); return; }
+    hideRt();
+    showError('');
+    if (!(await confirmProxy()) || !canSubmitBatch()) return;
     const body = { accounts_text: byId('accounts-text').value, timeout: 180, concurrency: Number(byId('concurrency').value) };
     if (byId('proxy').value.trim()) body.proxy = byId('proxy').value.trim();
-    hideRt();
     submitting = true;
     networkNotice = false;
     showError('');
@@ -622,7 +664,7 @@ import { getBrowserResults, collectBatchResults, isBatchCollected, resetResultCo
     byId(id).addEventListener('click', () => downloadLocal(kind, byId(id)));
   }
   byId('clear-browser-results')?.addEventListener('click', async () => {
-    if (clearing || submitting) return;
+    if (clearing || submitting || confirmingProxy) return;
     clearing = true; clearTimeout(pollTimer); clearTimeout(initializeTimer); pollRequest += 1;
     hideRt(); clearActiveJobs(); resetResultCollection(); render(null);
     initializing = false;

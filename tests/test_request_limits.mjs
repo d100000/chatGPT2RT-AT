@@ -84,7 +84,7 @@ test('related endpoints share action cooldowns even when resource IDs vary', () 
 class Element {
   constructor(tagName = 'div') {
     this.tagName = tagName.toUpperCase(); this.value = ''; this.disabled = false; this.hidden = false;
-    this.open = false; this.dataset = {}; this.children = []; this.listeners = new Map();
+    this.open = false; this.returnValue = ''; this.dataset = {}; this.children = []; this.listeners = new Map();
     this.attributes = new Map(); this.ownText = '';
     this.classList = { add() {}, remove() {}, toggle() {} };
   }
@@ -94,17 +94,28 @@ class Element {
   replaceChildren(...children) { this.children = children; this.ownText = ''; }
   setAttribute(name, value) { this.attributes.set(name, value); }
   removeAttribute(name) { this.attributes.delete(name); }
-  addEventListener(type, listener) {
+  addEventListener(type, listener, options = {}) {
     if (!this.listeners.has(type)) this.listeners.set(type, []);
-    this.listeners.get(type).push(listener);
+    this.listeners.get(type).push({ listener, once: Boolean(options.once) });
+  }
+  removeEventListener(type, listener) {
+    this.listeners.set(type, (this.listeners.get(type) || []).filter((entry) => entry.listener !== listener));
   }
   async dispatch(type) {
     if (type === 'click' && this.disabled) return;
-    for (const listener of this.listeners.get(type) || []) await listener({ type, target: this, preventDefault() {} });
+    for (const entry of [...(this.listeners.get(type) || [])]) {
+      if (entry.once) this.removeEventListener(type, entry.listener);
+      await entry.listener({ type, target: this, preventDefault() {} });
+    }
   }
   click() { return this.dispatch('click'); }
   showModal() { this.open = true; }
-  close() { this.open = false; }
+  close(value) {
+    if (!this.open) return Promise.resolve();
+    if (value !== undefined) this.returnValue = value;
+    this.open = false;
+    return this.dispatch('close');
+  }
   remove() {}
   focus() {}
 }
@@ -115,7 +126,11 @@ async function uiPage(file, fetchImpl, options = {}) {
   const body = new Element('body'); body.dataset.page = file === 'app.js' ? 'extractor' : 'converter';
   const document = {
     body, hidden: false, getElementById: byId,
-    querySelector: () => ({ content: 'synthetic-csrf' }),
+    querySelector(selector) {
+      if (selector === 'meta[name="rt-csrf"]') return { content: 'synthetic-csrf' };
+      if (selector === 'dialog[open]') return [...ids.entries()].find(([id, element]) => id.endsWith('-dialog') && element.open)?.[1] || null;
+      return null;
+    },
     createElement(tag) { const element = new Element(tag); created.push(element); return element; },
     createDocumentFragment: () => new Element(),
     addEventListener(type, listener) { if (!listeners.has(type)) listeners.set(type, []); listeners.get(type).push(listener); },
@@ -169,7 +184,11 @@ test('batch submission 429 preserves credentials in the form and never auto-resu
   });
   const input = 'synthetic@example.com----synthetic-password----SYNTHETIC';
   page.byId('accounts-text').value = input;
-  await page.byId('batch-form').dispatch('submit');
+  const submission = page.byId('batch-form').dispatch('submit');
+  assert.equal(page.byId('proxy-confirm-dialog').open, true);
+  assert.equal(requests.filter((r) => r.method === 'POST').length, 0);
+  await page.byId('proxy-confirm-dialog').close('start');
+  await submission;
   assert.equal(page.byId('accounts-text').value, input);
   assert.equal(page.byId('credentials-fields').disabled, false);
   assert.equal(page.byId('start-button').disabled, true);
@@ -178,6 +197,15 @@ test('batch submission 429 preserves credentials in the form and never auto-resu
   await page.time.advance(30_000);
   assert.equal(page.byId('start-button').disabled, false);
   assert.equal(requests.filter((r) => r.method === 'POST').length, 1);
+  const retry = page.byId('batch-form').dispatch('submit');
+  assert.equal(page.byId('proxy-confirm-dialog').open, true);
+  assert.equal(requests.filter((r) => r.method === 'POST').length, 1);
+  await page.byId('proxy-confirm-dialog').close('start');
+  await retry;
+  assert.equal(requests.filter((r) => r.method === 'POST').length, 2);
+  assert.equal(page.byId('accounts-text').value, input);
+  assert.equal(page.byId('start-button').disabled, true);
+  assert.match(page.byId('start-label').textContent, /30 秒/);
 });
 
 test('status-query cooling does not disable or defer cancellation', async () => {

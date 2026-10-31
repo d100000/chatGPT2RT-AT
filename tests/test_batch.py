@@ -8,6 +8,9 @@ import tempfile
 import time
 import unittest
 
+import httpx
+
+from rt_extractor._protocol import login
 from rt_extractor.api import TokenBundle
 from rt_extractor.web import create_app
 from tests.web_client import browser_headers
@@ -167,6 +170,31 @@ class BatchWebTests(unittest.TestCase):
             self.assertEqual(response.status_code, 400)
             self.assert_redacted(response.get_json())
         self.assertEqual(self.calls, [])
+
+    def test_forbidden_account_shows_hint_and_later_accounts_continue(self):
+        async def mixed(email, _password, **_kwargs):
+            if email.startswith("blocked"):
+                login._check_status(
+                    httpx.Response(403, json={"password": PASSWORD, "totp_secret": SECRET}),
+                    "密码验证",
+                )
+            return bundle(email)
+
+        self.extract = mixed
+        emails = ["blocked@example.com", "next@example.com"]
+        batch = self.start("\n".join(record(email) for email in emails))
+        done = self.wait_batch(batch["id"], {"completed"})
+        self.assertEqual([row["status"] for row in done["rows"]], ["error", "success"])
+        failed = done["rows"][0]
+        self.assertIn("密码验证", failed["error"])
+        self.assertIn("HTTP 403", failed["error"])
+        self.assertIn("账号可能需要", failed["error"])
+        job = self.wait_job(failed["id"], {"error"})
+        self.assertEqual(job["error"], failed["error"])
+        self.assertTrue(any(event["message"] == failed["error"] for event in job["events"]))
+        self.assert_redacted(done)
+        self.assert_redacted(job)
+        self.assertEqual(list(self.output_dir.rglob("*.json")), [])
 
     def test_one_failure_does_not_stop_later_accounts_and_downloads_only_successes(
         self,

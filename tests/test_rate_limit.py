@@ -10,7 +10,7 @@ from unittest.mock import AsyncMock, patch
 import httpx
 
 from rt_extractor._protocol import errors, login
-from rt_extractor._protocol.errors import ProtocolError, RateLimitedError, raise_for_rate_limit
+from rt_extractor._protocol.errors import ForbiddenError, ProtocolError, RateLimitedError, raise_for_rate_limit
 from rt_extractor._protocol.sentinel import SentinelGenerator
 
 
@@ -48,12 +48,54 @@ class RateLimitTests(unittest.TestCase):
         self.assertIsInstance(raised.exception, ProtocolError)
         self.assertNotIn("synthetic-secret", str(raised.exception))
         self.assertIsNone(login._check_status(httpx.Response(200), "合成认证"))
-        with self.assertRaises(ProtocolError) as forbidden:
+        with self.assertRaises(ForbiddenError) as forbidden:
             login._check_status(httpx.Response(403), "合成认证")
         self.assertNotIsInstance(forbidden.exception, RateLimitedError)
+        self.assertIn("HTTP 403", str(forbidden.exception))
+        self.assertIn("账号可能需要", str(forbidden.exception))
+
+    def test_other_http_failures_do_not_suggest_account_verification(self):
+        for status in (401, 500):
+            with self.subTest(status=status):
+                response = httpx.Response(status, json={"token": "synthetic-sensitive-response"})
+                with self.assertRaises(ProtocolError) as error:
+                    login._check_status(response, "合成认证")
+                self.assertNotIsInstance(error.exception, ForbiddenError)
+                self.assertIn(f"HTTP {status}", str(error.exception))
+                self.assertNotIn("账号可能需要", str(error.exception))
+                self.assertNotIn("synthetic-sensitive-response", str(error.exception))
 
 
 class SentinelRateLimitTests(unittest.IsolatedAsyncioTestCase):
+    async def test_sentinel_forbidden_preserves_account_hint_without_fallback(self):
+        generator = SentinelGenerator(device_id="synthetic-device", user_agent="synthetic-agent")
+        client = SimpleNamespace(post=AsyncMock(return_value=httpx.Response(
+            403, json={"token": "synthetic-sensitive-response"},
+        )))
+        with patch.object(SentinelGenerator, "_fallback_result") as fallback:
+            with self.assertRaises(ForbiddenError) as raised:
+                await generator.sentinel_token(client, "synthetic-flow")
+        client.post.assert_awaited_once()
+        fallback.assert_not_called()
+        self.assertIn("HTTP 403", str(raised.exception))
+        self.assertIn("账号可能需要", str(raised.exception))
+        self.assertNotIn("synthetic-sensitive-response", str(raised.exception))
+
+    async def test_sentinel_forbidden_on_transient_retry_is_not_swallowed(self):
+        generator = SentinelGenerator(device_id="synthetic-device", user_agent="synthetic-agent")
+        client = SimpleNamespace(post=AsyncMock(side_effect=[
+            RuntimeError("synthetic transient failure"),
+            httpx.Response(403, text="synthetic-sensitive-response"),
+        ]))
+        with patch.object(SentinelGenerator, "_fallback_result") as fallback:
+            with self.assertRaises(ForbiddenError) as raised:
+                await generator.sentinel_token(client, "synthetic-flow")
+        self.assertEqual(client.post.await_count, 2)
+        fallback.assert_not_called()
+        self.assertIn("HTTP 403", str(raised.exception))
+        self.assertIn("账号可能需要", str(raised.exception))
+        self.assertNotIn("synthetic-sensitive-response", str(raised.exception))
+
     async def test_sentinel_propagates_rate_limit_without_retry_or_fallback(self):
         generator = SentinelGenerator(device_id="synthetic-device", user_agent="synthetic-agent")
         client = SimpleNamespace(post=AsyncMock(return_value=httpx.Response(
