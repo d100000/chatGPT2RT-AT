@@ -92,6 +92,9 @@ h3 { margin: 0; font-size: 13px; font-weight: 600; }
 .promotion-price { flex-shrink: 0; margin: 0; color: var(--promotion-accent); font-size: 13px; white-space: nowrap; }
 .promotion-price strong { font: 700 34px/1.2 var(--mono); }
 .promotion-price span { color: var(--promotion-ink); }
+.bob-promotion { --promotion-bg: var(--blue-soft); --promotion-rule: #c6d5fa; --promotion-ink: #243d75; --promotion-accent: var(--blue); }
+.bob-promotion .promotion-title { color: var(--blue); }
+.promotion-description { margin: 6px 0 0; font-size: 13px; line-height: 1.8; overflow-wrap: anywhere; }
 @media (max-width: 600px) { .author-promotion { align-items: flex-start; flex-direction: column; gap: 12px; padding: 16px 18px; } .promotion-title { font-size: 15px; } .promotion-price strong { font-size: 30px; } }
 .workflow-strip { display: flex; align-items: center; gap: var(--space-xl); list-style: none; padding: 0 0 var(--space-md); margin: 0 0 var(--space-md); border-bottom: 1px solid var(--rule); }
 .workflow-strip li { display: flex; align-items: center; gap: 8px; color: var(--muted); font-size: 12px; }
