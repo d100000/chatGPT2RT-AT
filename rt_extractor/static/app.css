@@ -375,7 +375,8 @@ body:has(#site-notice-dialog[open], #proxy-confirm-dialog[open]) { overflow: hid
   :root { --space-xl: 20px; --pane-inset: 21px; --space-lg: 24px; }
   .sidebar { padding-top: 14px; }
   .brand { gap: 9px; }
-  .workspace-nav { gap: 4px; margin-top: var(--space-sm); }
+  .workspace-nav { gap: 4px; margin-top: var(--space-sm); flex-wrap: wrap; }
+  .workspace-nav a { flex-basis: calc(50% - 4px); }
   .workspace-nav a { gap: 7px; font-size: 11px; }
   .workspace-nav a svg { width: 16px; height: 16px; }
   .network-summary-status { max-width: 145px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }

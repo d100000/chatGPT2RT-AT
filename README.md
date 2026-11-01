@@ -13,6 +13,7 @@
 | 获取 ChatGPT RT、AT 和 ID Token | Token 获取：网页批量、CLI / Python 单账号 | [Token 提取指南](docs/TOKEN-GUIDE.md) |
 | 转换已有 CPA / Sub2API 认证 JSON | CPA ↔ Sub2API 浏览器本地转换 | [转换与字段映射](#cpa--sub2api-格式转换) |
 | 了解当前浏览器出口的风险证据 | IPOK IP 纯净度检测 | [IP 检测说明](#ip-纯净度检测) |
+| 重复生成鹈鹕骑自行车 SVG、人工评分与对比 | GPT 能力评测 · 鹈鹕题库 `/pelican` | [完整操作、保存与测试说明](docs/PELICAN.md) |
 
 ```text
 邮箱 + 密码 + 2FA → 登录验证 → 获取 AT / RT / ID Token → 原始 JSON / Sub2API / CPA
@@ -69,7 +70,9 @@ python3 -m venv .venv
 
 启动后打开 [http://127.0.0.1:8765](http://127.0.0.1:8765)。
 
-桌面左侧、手机顶部提供三个功能入口：**Token 获取**（`/`）、**格式转换**（`/converter`）、**IP 检测**（`/network`）。切换工具不停止正在执行的提取任务；回到 Token 页可继续跟踪进度。
+桌面左侧、手机顶部提供四个功能入口：**Token 获取**（`/`）、**格式转换**（`/converter`）、**IP 检测**（`/network`）、**GPT 能力评测**（`/pelican`）。切换工具不停止正在执行的任务。鹈鹕模块支持单次、批量、定时与持续循环、人工与可选 AI 看图评分、历史对比及 JSON / CSV / HTML / SVG 导出，详见 [使用说明](docs/PELICAN.md)。
+
+能力评测的原始输出、评分与图片单独保存在本机 SQLite 历史库，API key 只留在内存；本 README 下文的 Token 临时缓存规则专指 Token 工具。评测默认只选择 `gpt-6.1-sol`，high / 16000 Token / 600 秒 / 流式，是否可用由实际接口决定。鹈鹕评分不代表 IQ、总体智力或上游模型身份。
 
 Windows 创建虚拟环境时可使用 `python -m venv .venv`，后续将 `.venv/bin/python` 替换为 `.venv\Scripts\python.exe`。
 

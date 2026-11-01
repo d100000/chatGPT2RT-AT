@@ -25,7 +25,8 @@ from .web_jobs import ACTIVE, _credentials
 from .workspace_registry import WorkspaceRegistry
 
 def create_app(output_dir: str | Path | None = None, extractor: Callable | None = None, *,
-               abuse_policy: AbusePolicy | None = None, abuse_clock: Callable = time.monotonic) -> Flask:
+               abuse_policy: AbusePolicy | None = None, abuse_clock: Callable = time.monotonic,
+               pelican_dir: str | Path | None = None, pelican_transport=None) -> Flask:
     app = Flask(__name__)
     app.config.update(MAX_CONTENT_LENGTH=3 * 1024 * 1024, MAX_FORM_MEMORY_SIZE=16 * 1024,
                       MAX_FORM_PARTS=10, RT_CSRF_TOKEN=secrets.token_urlsafe(32),
@@ -87,7 +88,7 @@ def create_app(output_dir: str | Path | None = None, extractor: Callable | None 
         browser = browser_identities.resolve(request.cookies)
         g.abuse_identity = abuse.identity(request.remote_addr, browser.device, browser.session)
         abuse.check_request(g.abuse_identity, control=request.endpoint in {
-            "cancel", "cancel_batch", "ack_batch", "ack_job", "clear_workspace"},
+            "cancel", "cancel_batch", "ack_batch", "ack_job", "clear_workspace", "pelican_stop"},
                             static=request.endpoint == "static")
         try:
             host = urlsplit("http://" + request.host)
@@ -102,7 +103,7 @@ def create_app(output_dir: str | Path | None = None, extractor: Callable | None 
         if origin and origin != request.host_url.rstrip("/"):
             return reject_access("请求来源不匹配")
         endpoint = request.endpoint
-        if (request.method == "GET" and endpoint in {"index", "converter", "network"}
+        if (request.method == "GET" and endpoint in {"index", "converter", "network", "pelican_page"}
                 and (browser.device is None or browser.session is None)):
             abuse.check_identity_issuance(g.abuse_identity)
             browser = browser_identities.resolve(request.cookies, issue=True)
@@ -116,7 +117,7 @@ def create_app(output_dir: str | Path | None = None, extractor: Callable | None 
                     supplied_csrf.encode(), g.csrf_token.encode())):
                 return reject_access("页面凭据已过期，请刷新页面")
             g.workspace = registry.get(g.workspace_owner)
-        if endpoint in {"start", "start_batch"}:
+        if endpoint in {"start", "start_batch", "pelican_start", "pelican_models", "pelican_ai_review"}:
             abuse.check_action(g.abuse_identity, "submit")
         elif endpoint == "code":
             job_id = (request.view_args or {}).get("job_id")
@@ -139,7 +140,7 @@ def create_app(output_dir: str | Path | None = None, extractor: Callable | None 
 
     @app.after_request
     def secure_headers(response):
-        private = request.path.startswith("/api/") or request.endpoint in {"index", "converter", "network"}
+        private = request.path.startswith("/api/") or request.endpoint in {"index", "converter", "network", "pelican_page"}
         response.headers["Cache-Control"] = "private, no-store, max-age=0" if private else "no-store"
         if private:
             response.vary.add("Cookie")
@@ -160,7 +161,7 @@ def create_app(output_dir: str | Path | None = None, extractor: Callable | None 
               and (request.view_args or {}).get("filename") in {"social-preview.png", "social-preview.svg"}
               and response.status_code == 200):
             response.headers["X-Robots-Tag"] = "index, follow"
-        elif request.endpoint in {"index", "converter", "network"} and response.status_code == 200:
+        elif request.endpoint in {"index", "converter", "network", "pelican_page"} and response.status_code == 200:
             response.headers["X-Robots-Tag"] = "noindex, follow, noarchive"
         else:
             response.headers["X-Robots-Tag"] = "noindex, nofollow, nosnippet, noarchive"
@@ -477,6 +478,8 @@ def create_app(output_dir: str | Path | None = None, extractor: Callable | None 
                             ("conversion-source", "batch_conversion_source")):
         app.add_url_rule(f"/api/batches/<batch_id>/{route}", endpoint, retired_batch_export, methods=["GET"])
 
+    from .pelican_routes import register_pelican
+    register_pelican(app, directory=pelican_dir, transport=pelican_transport)
     return app
 
 
