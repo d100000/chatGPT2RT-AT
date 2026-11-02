@@ -211,6 +211,7 @@ DOC_PAGES = (
 DOCS_BY_SLUG = {page.slug: page for page in DOC_PAGES}
 
 TOOL_META = {
+    "/benchmark": ("并发分析", "对多个模型进行真实并发请求，比较首字延迟、阶段吞吐、成功率和缓存用量，支持历史与离线导出。"),
     "/pelican": ("GPT 能力评测 · 鹈鹕题库", "原题 SVG 独立生成、服务端持续测试、人工与可选 AI 看图评分，以及历史对比和报告。视觉任务评分不代表 IQ 或上游模型身份。"),
     "/": ("GPT Token 提取：RT / AT / ID Token", "登录已有授权 ChatGPT 账号，批量提取 RT、AT 和 ID Token，并在浏览器生成 CPA 与 Sub2API 认证文件。网页结果仅缓存在所属浏览器会话中。"),
     "/converter": ("CPA ↔ Sub2API 格式转换", "在浏览器内双向转换 CPA 与 Sub2API 认证 JSON，支持 Codex/OpenAI、Claude、Antigravity 和 Gemini；导入的 Token 不上传服务器。"),

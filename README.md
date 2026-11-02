@@ -447,3 +447,9 @@ CPA 转换模块适配自 [CPA2sub2API](https://github.com/gtxx3600/CPA2sub2API)
 - 开源仓库：[d100000/chatGPT2RT-AT](https://github.com/d100000/chatGPT2RT-AT)
 
 欢迎交流使用经验、反馈问题和参与改进。相关第三方模块的来源与许可见 [THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md)。
+
+## 并发分析 Tab
+
+打开 `/benchmark`，可比较多个模型在不同并发和输入模式下的首字延迟、吞吐、成功率及缓存使用情况。支持 Responses / Chat Completions、共享连接、后台运行与停止、历史恢复，以及 HTML / CSV / JSON 导出。已有服务请重启以载入新路由。
+
+完整启动、指标口径、密钥与历史说明、API 和本地 mock 验证方式见 [并发分析说明](docs/benchmark.md)。

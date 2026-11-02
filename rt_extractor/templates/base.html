@@ -18,6 +18,7 @@ FORM: User-authorized reorganization of the existing workbench; compact navigati
   <script type="module" src="{{ url_for('static', filename='pelican-status.mjs') }}"></script>
   <script type="module" src="{{ url_for('static', filename='site-notice.mjs') }}"></script>
   <script type="module" src="{{ url_for('static', filename='network.js') }}"></script>
+  <script type="module" src="{{ url_for('static', filename='benchmark-workspace.mjs') }}"></script>
   {% block scripts %}{% endblock %}
 </head>
 <body data-page="{% block page_id %}{% endblock %}">
@@ -33,6 +34,7 @@ FORM: User-authorized reorganization of the existing workbench; compact navigati
       <a href="/converter" {% if active_page == 'converter' %}aria-current="page"{% endif %}><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 7h15m-4-4 4 4-4 4M20 17H5m4-4-4 4 4 4"/></svg><span>格式转换<small>CPA ⇄ Sub2API</small></span></a>
       <a href="/network" {% if active_page == 'network' %}aria-current="page"{% endif %}><svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="12" r="9"/><path d="M3 12h18M12 3a17 17 0 0 1 0 18 17 17 0 0 1 0-18"/></svg><span>IP 检测<small>出口与纯净度</small></span></a>
       <a href="/pelican" {% if active_page == 'pelican' %}aria-current="page"{% endif %}><svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="6" cy="17" r="4"/><circle cx="18" cy="17" r="4"/><path d="m6 17 5-9 7 9H6m5-9h4m-2-4h4l3 3h-5l-3 6"/></svg><span class="nav-label">GPT 能力评测<small>鹈鹕题库 · 持续测试</small><span id="pelican-task-badge" class="nav-task-badge" aria-live="polite" hidden></span></span></a>
+      <a href="/benchmark" {% if active_page == 'benchmark' %}aria-current="page"{% endif %}><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 20h16M6 16v-5m6 5V4m6 12V8"/></svg><span class="nav-label">并发分析<small>延迟 · 吞吐 · 缓存</small><span id="benchmark-task-badge" class="nav-task-badge" hidden></span></span></a>
     </nav>
     <section class="sidebar-network" aria-labelledby="network-summary-heading">
       <div class="network-summary-heading"><h2 id="network-summary-heading">当前网络</h2><button id="network-summary-refresh" class="icon-button" type="button" aria-label="重新检测当前网络" title="重新检测"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M20 7v5h-5M4 17v-5h5M6 7a7 7 0 0 1 12-2l2 2M4 17l2 2a7 7 0 0 0 12-2"/></svg></button></div>
@@ -44,10 +46,11 @@ FORM: User-authorized reorganization of the existing workbench; compact navigati
     <div class="sidebar-foot"><span class="status-dot" aria-hidden="true"></span>本地工作台 · 工具独立保存 <a href="/docs">使用文档</a></div>
   </aside>
   <div class="app-main">
-    <header class="shell-bar"><div class="shell-location"><span>bob ai工具</span><span aria-hidden="true">/</span><strong>{% block tool_name %}{% endblock %}</strong></div><div class="shell-actions"><button id="site-notice-open" class="site-notice-trigger" type="button" aria-haspopup="dialog" aria-controls="site-notice-dialog">公告</button><div class="connection" id="connection"><span class="status-dot" aria-hidden="true"></span><span id="connection-label">{% block connection_label %}本地工作空间{% endblock %}</span></div></div></header>
+    <header class="shell-bar"><div class="shell-location"><span>bob ai工具</span><span aria-hidden="true">/</span><strong>{% block tool_name %}{% endblock %}</strong></div><div class="shell-actions"><span id="workspace-active-count" class="section-caption" aria-live="polite">后台任务 0</span><button id="shared-connection-open" class="site-notice-trigger" type="button" aria-haspopup="dialog" aria-controls="shared-connection-dialog">连接设置</button><button id="site-notice-open" class="site-notice-trigger" type="button" aria-haspopup="dialog" aria-controls="site-notice-dialog">公告</button><div class="connection" id="connection"><span class="status-dot" aria-hidden="true"></span><span id="connection-label">{% block connection_label %}本地工作空间{% endblock %}</span></div></div></header>
     <main id="main-content" class="workspace {% block workspace_class %}{% endblock %}" tabindex="-1">{% block content %}{% endblock %}</main>
   </div>
   {% include "site_notice_dialog.html" %}
+  {% include "shared_connection.html" %}
   {% block dialogs %}{% endblock %}
 </body>
 </html>

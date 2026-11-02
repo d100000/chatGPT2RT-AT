@@ -1,0 +1,12 @@
+<dialog id="shared-connection-dialog" class="shared-connection-dialog" aria-labelledby="shared-connection-title">
+  <form id="shared-connection-form">
+    <div class="section-heading"><h2 id="shared-connection-title">共享连接设置</h2><button id="shared-connection-close" class="icon-button" type="button" aria-label="关闭连接设置">×</button></div>
+    <p class="field-help">供本浏览器工具使用。密钥仅保存在服务进程内存，重启后需重新填写；空密钥表示无需鉴权。</p>
+    <div class="field"><label for="shared-url">接口 URL</label><input id="shared-url" type="url" placeholder="https://api.example.com/v1" required></div>
+    <div class="field"><label for="shared-protocol">接口协议</label><select id="shared-protocol"><option value="responses">Responses</option><option value="chat">Chat Completions</option></select></div>
+    <div class="field"><label for="shared-key">API key（可留空）</label><input id="shared-key" type="password" autocomplete="off" spellcheck="false"><p id="shared-key-status" class="field-help"></p></div>
+    <div class="field"><label for="shared-model">默认模型（可留空）</label><input id="shared-model" maxlength="256" placeholder="模型 ID"></div>
+    <p id="shared-connection-error" class="inline-error" role="alert" hidden></p>
+    <div class="form-actions"><button class="button button-primary" type="submit">保存连接</button><button class="button button-secondary" id="shared-connection-clear" type="button">清除连接</button></div>
+  </form>
+</dialog>

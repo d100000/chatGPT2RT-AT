@@ -422,3 +422,11 @@ body:has(#site-notice-dialog[open], #proxy-confirm-dialog[open]) { overflow: hid
 }
 @media (max-width: 380px) { :root { --space-xl: 14px; --pane-inset: 18px; } .brand-name { font-size: 12px; } .workspace-nav a { gap: 5px; } .batch-counts strong { font-size: 21px; } .batch-counts > div { padding-left: 9px; } .download-actions .button { width: 100%; justify-content: space-between; } .page-heading #network-refresh { min-height: 36px; } }
 @media (prefers-reduced-motion: reduce) { *, *::before, *::after { transition: none !important; scroll-behavior: auto !important; } }
+
+/* Shared, memory-only API connection controls across tools. */
+.shared-connection-dialog { width: min(480px, calc(100% - 32px)); border: 1px solid var(--rule); border-radius: var(--radius); padding: var(--pane-inset); color: var(--ink); background: var(--paper); box-shadow: var(--elevation-dialog); }
+.shared-connection-dialog::backdrop { background: #17233d66; }
+.shared-connection-dialog .field-help { margin-bottom: var(--space-md); }
+.inline-error { padding: var(--space-sm); color: var(--error); background: var(--error-soft); border-radius: var(--control-radius); overflow-wrap: anywhere; font-size: 12px; }
+
+@media (max-width: 760px) { .shell-bar { flex-wrap: wrap; padding-block: var(--space-xs); } .shell-location { white-space: nowrap; flex-shrink: 0; } .shell-actions { margin-left: auto; } }

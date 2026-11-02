@@ -26,7 +26,8 @@ from .workspace_registry import WorkspaceRegistry
 
 def create_app(output_dir: str | Path | None = None, extractor: Callable | None = None, *,
                abuse_policy: AbusePolicy | None = None, abuse_clock: Callable = time.monotonic,
-               pelican_dir: str | Path | None = None, pelican_transport=None) -> Flask:
+               pelican_dir: str | Path | None = None, pelican_transport=None,
+               benchmark_dir: str | Path | None = None, benchmark_transport=None) -> Flask:
     app = Flask(__name__)
     app.config.update(MAX_CONTENT_LENGTH=3 * 1024 * 1024, MAX_FORM_MEMORY_SIZE=16 * 1024,
                       MAX_FORM_PARTS=10, RT_CSRF_TOKEN=secrets.token_urlsafe(32),
@@ -88,7 +89,7 @@ def create_app(output_dir: str | Path | None = None, extractor: Callable | None 
         browser = browser_identities.resolve(request.cookies)
         g.abuse_identity = abuse.identity(request.remote_addr, browser.device, browser.session)
         abuse.check_request(g.abuse_identity, control=request.endpoint in {
-            "cancel", "cancel_batch", "ack_batch", "ack_job", "clear_workspace", "pelican_stop"},
+            "cancel", "cancel_batch", "ack_batch", "ack_job", "clear_workspace", "pelican_stop", "benchmark_stop"},
                             static=request.endpoint == "static")
         try:
             host = urlsplit("http://" + request.host)
@@ -103,7 +104,7 @@ def create_app(output_dir: str | Path | None = None, extractor: Callable | None 
         if origin and origin != request.host_url.rstrip("/"):
             return reject_access("请求来源不匹配")
         endpoint = request.endpoint
-        if (request.method == "GET" and endpoint in {"index", "converter", "network", "pelican_page"}
+        if (request.method == "GET" and endpoint in {"index", "converter", "network", "pelican_page", "benchmark_page"}
                 and (browser.device is None or browser.session is None)):
             abuse.check_identity_issuance(g.abuse_identity)
             browser = browser_identities.resolve(request.cookies, issue=True)
@@ -140,7 +141,7 @@ def create_app(output_dir: str | Path | None = None, extractor: Callable | None 
 
     @app.after_request
     def secure_headers(response):
-        private = request.path.startswith("/api/") or request.endpoint in {"index", "converter", "network", "pelican_page"}
+        private = request.path.startswith("/api/") or request.endpoint in {"index", "converter", "network", "pelican_page", "benchmark_page"}
         response.headers["Cache-Control"] = "private, no-store, max-age=0" if private else "no-store"
         if private:
             response.vary.add("Cookie")
@@ -161,7 +162,7 @@ def create_app(output_dir: str | Path | None = None, extractor: Callable | None 
               and (request.view_args or {}).get("filename") in {"social-preview.png", "social-preview.svg"}
               and response.status_code == 200):
             response.headers["X-Robots-Tag"] = "index, follow"
-        elif request.endpoint in {"index", "converter", "network", "pelican_page"} and response.status_code == 200:
+        elif request.endpoint in {"index", "converter", "network", "pelican_page", "benchmark_page"} and response.status_code == 200:
             response.headers["X-Robots-Tag"] = "noindex, follow, noarchive"
         else:
             response.headers["X-Robots-Tag"] = "noindex, nofollow, nosnippet, noarchive"
@@ -480,6 +481,8 @@ def create_app(output_dir: str | Path | None = None, extractor: Callable | None 
 
     from .pelican_routes import register_pelican
     register_pelican(app, directory=pelican_dir, transport=pelican_transport)
+    from .benchmark_routes import register_benchmark
+    register_benchmark(app, directory=benchmark_dir, transport=benchmark_transport)
     return app
 
 

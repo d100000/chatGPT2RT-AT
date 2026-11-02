@@ -1,0 +1,58 @@
+{% extends "base.html" %}
+{% set active_page = 'benchmark' %}
+{% block title %}并发分析{% endblock %}
+{% block page_id %}benchmark{% endblock %}
+{% block tool_name %}并发分析{% endblock %}
+{% block workspace_class %}benchmark-workspace{% endblock %}
+{% block styles %}<link rel="stylesheet" href="{{ url_for('static', filename='benchmark.css') }}">{% endblock %}
+{% block scripts %}<script type="module" src="{{ url_for('static', filename='benchmark.mjs') }}"></script>{% endblock %}
+{% block content %}
+<div class="benchmark-layout">
+  <aside class="benchmark-config" aria-label="测试配置">
+    <section class="benchmark-shared"><div class="section-heading"><h2>共享连接</h2><button class="text-button" id="bench-use-shared" type="button">填入连接</button></div><p id="bench-shared-status" class="field-help">尚未配置，可从顶部「连接设置」保存。</p></section>
+    <form id="benchmark-form" novalidate>
+      <fieldset id="bench-fields">
+        <div class="benchmark-config-title"><span class="eyebrow">BENCHMARK SETUP</span><h2>测试配置</h2></div>
+        <section class="benchmark-config-section"><h3>01 <span>连接与模型</span></h3>
+          <div class="field"><label for="bench-url">接口 URL</label><input id="bench-url" type="url" placeholder="https://api.example.com/v1" autocomplete="off" required><p class="field-help">支持 Base URL 或完整端点，保留代理路径。</p></div>
+          <div class="field"><label for="bench-protocol">接口协议</label><select id="bench-protocol"><option value="responses">Responses</option><option value="chat">Chat Completions</option></select></div>
+          <div class="field"><label for="bench-key">API key <span class="benchmark-muted">可留空</span></label><div class="benchmark-key"><input id="bench-key" type="password" autocomplete="off" spellcheck="false" placeholder="手动填写优先于共享密钥"><button id="bench-key-toggle" class="button button-secondary" type="button" aria-pressed="false" aria-controls="bench-key">显示</button></div><p class="field-help">留空仅复用相同 origin 的共享密钥。密钥不写入浏览器存储或报告。</p></div>
+          <div class="section-heading"><label for="bench-model-search">选择模型 <span id="bench-model-count">0 / 10</span></label><button class="button button-secondary" id="bench-model-load" type="button">读取模型</button></div>
+          <input id="bench-model-search" type="search" aria-label="搜索模型名称" placeholder="搜索模型名称…" autocomplete="off">
+          <div class="benchmark-model-tools"><button class="text-button" id="bench-model-select" type="button">勾选筛选结果</button><button class="text-button" id="bench-model-clear" type="button">清空</button></div>
+          <p id="bench-model-message" class="field-help" role="status">填写接口后读取可用模型，不会自动开始测试。</p>
+          <div id="bench-model-list" class="benchmark-model-list" role="group" aria-label="可用模型"></div>
+        </section>
+        <section class="benchmark-config-section"><h3>02 <span>并发与测试输入</span></h3>
+          <div class="field"><label for="bench-levels">并发档位</label><input id="bench-levels" value="1, 5, 10" required><div class="benchmark-presets"><button type="button" class="text-button" data-levels="1, 5, 10">基础 1 / 5 / 10</button><button type="button" class="text-button" data-levels="10, 20, 50, 100">进阶 10 / 20 / 50 / 100</button></div><p class="field-help">同时在途请求上限，不等于每秒请求数。</p></div>
+          <div class="field"><label for="bench-requests">每档测量请求数</label><input id="bench-requests" type="number" min="1" max="200" step="1" value="20"><p class="field-help">每阶段实际数量取此值与并发数中的较大值。</p></div>
+          <div class="benchmark-pair"><div class="field"><label for="bench-input-min">近似输入 Token 下限</label><input id="bench-input-min" type="number" min="64" max="16384" step="1" value="1024"></div><div class="field"><label for="bench-input-max">上限</label><input id="bench-input-max" type="number" min="64" max="16384" step="1" value="2048"></div></div>
+          <fieldset class="benchmark-modes"><legend>输入模式</legend><label><input type="checkbox" id="bench-unique" checked><span>随机输入<small>每条请求以独有 nonce 开头</small></span></label><label><input type="checkbox" id="bench-shared-prefix" checked><span>共享前缀<small>每阶段先预热 1 次，再测量</small></span></label></fieldset>
+        </section>
+        <details class="benchmark-config-section benchmark-advanced"><summary>更多参数</summary>
+          <div class="field"><label for="bench-max-output">最大输出 Token</label><input id="bench-max-output" type="number" min="1" max="16384" step="1" value="128"></div>
+          <div class="field"><label for="bench-timeout">单次请求总超时（秒）</label><input id="bench-timeout" type="number" min="1" max="600" step="1" value="120"></div>
+          <div class="field"><label for="bench-reasoning">推理强度</label><select id="bench-reasoning"><option value="">模型默认</option>{% for effort in ['none', 'minimal', 'low', 'medium', 'high', 'xhigh'] %}<option value="{{ effort }}">{{ effort }}</option>{% endfor %}</select></div>
+          <div class="field" id="bench-output-field-wrap" hidden><label for="bench-output-field">Chat 输出上限字段</label><select id="bench-output-field"><option value="max_completion_tokens">max_completion_tokens</option><option value="max_tokens">max_tokens</option></select></div>
+        </details>
+      </fieldset>
+      <section class="benchmark-plan"><h3>测试计划预览</h3><dl id="bench-plan"></dl><p id="bench-validation" class="inline-error" role="alert" hidden></p><p class="field-help">总调用最多 10,000 次；预热计入进度，不参与性能统计。</p></section>
+      <div class="benchmark-actions"><button class="button button-primary" id="bench-start" type="submit" disabled>开始测量 <span aria-hidden="true">→</span></button><button class="button button-secondary" id="bench-stop" type="button" disabled>停止当前批次</button></div>
+      <p class="field-help benchmark-persist-note">后台执行 · 刷新或关闭页面不影响测试<br>停止仅中断本地连接，上游可能仍在计算。</p>
+    </form>
+  </aside>
+  <div class="benchmark-results">
+    <header class="page-heading"><div><p class="eyebrow">MODEL PERFORMANCE</p><h1>并发分析</h1><p class="page-description">在不同并发与输入模式下，观察模型接口的实际表现。</p></div><span id="bench-state" class="benchmark-status" role="status" aria-live="polite" data-status="idle">待开始</span></header>
+    <div id="bench-connection-error" class="inline-error" role="status" hidden></div>
+    <div id="bench-action-error" class="inline-error" role="alert" hidden></div>
+    <section class="benchmark-explainer"><strong>同一份输入，逐模型比较</strong><p>真实流式请求，分别测量首字、吞吐、成功率与缓存。模型依次执行；共享前缀不保证缓存命中，输入 Token 为近似目标。</p></section>
+    <section class="benchmark-panel benchmark-history" aria-label="测试历史与导出"><div class="benchmark-history-select"><label for="bench-history">测试历史</label><select id="bench-history"><option value="">当前任务</option></select></div><div class="benchmark-toolbar"><button class="button button-secondary" id="bench-history-refresh" type="button">刷新历史</button><button class="text-button" id="bench-current" type="button" hidden>回到当前任务</button><span class="benchmark-divider"></span><button class="button button-secondary" type="button" data-export="html" disabled>HTML</button><button class="button button-secondary" type="button" data-export="csv" disabled>CSV</button><button class="button button-secondary" type="button" data-export="json" disabled>JSON</button></div></section>
+    <section class="benchmark-panel benchmark-progress" aria-labelledby="bench-progress-heading"><div class="section-heading"><h2 id="bench-progress-heading">测试进度</h2><span id="bench-progress-label" class="section-caption">尚未开始</span></div><progress id="bench-progress" max="1" value="0" aria-label="总调用进度"></progress><div id="bench-progress-counts" class="benchmark-progress-counts"><span>测量 <strong>0 / 0</strong></span><span>预热 <strong>0 / 0</strong></span><span>在途 <strong>0</strong></span></div><p id="bench-current-stage" class="field-help">读取模型并设置计划后，点击「开始测量」。</p><p id="bench-run-info" class="field-help"></p><p id="bench-run-error" class="inline-error" hidden></p></section>
+    <div class="benchmark-metrics" id="bench-metrics" aria-label="核心测量指标"></div>
+    <section class="benchmark-panel"><div class="section-heading"><h2>分阶段结果</h2><span id="bench-results-label" class="section-caption">完成测量后按阶段比较</span></div><div class="benchmark-table-scroll" tabindex="0" role="region" aria-label="分阶段结果表格，可横向滚动"><table class="benchmark-table"><thead><tr><th>模型 / 输入模式</th><th>并发</th><th>成功 / 完成</th><th>平均首字</th><th>P95 首字</th><th>成功请求/秒</th><th>输出 Token/秒</th><th>缓存命中</th><th>状态</th></tr></thead><tbody id="bench-stages"></tbody></table></div><p id="bench-stages-empty" class="benchmark-empty">暂无阶段结果<br><small>开始后，每个模型、输入模式与并发档位将分别列出。</small></p></section>
+    <section class="benchmark-panel"><div class="section-heading"><h2>模型分析报告</h2><span class="section-caption">基于实测统计 · 无额外模型调用</span></div><div id="bench-models-summary" class="benchmark-model-summaries"></div><ul id="bench-report" class="benchmark-report"></ul><details id="bench-distributions" class="benchmark-methods" hidden><summary>时间分布与错误分布</summary><div id="bench-distribution-table" class="benchmark-table-scroll" tabindex="0" role="region" aria-label="时间分布，可横向滚动"></div><p id="bench-error-distribution" class="field-help"></p></details><p id="bench-report-empty" class="benchmark-empty">尚无测量数据，报告将在请求完成后自动生成。</p></section>
+    <section class="benchmark-panel"><div class="section-heading"><h2>请求明细</h2><span class="section-caption">最近 50 条 · 新到旧 · 包含预热</span></div><div id="bench-records"></div><p id="bench-records-empty" class="benchmark-empty">尚未派发请求。完整记录可通过 CSV / JSON 导出。</p></section>
+    <details class="benchmark-panel benchmark-methods"><summary>测量方法与结果范围</summary><ul>{% for method in methods %}<li>{{ method }}</li>{% endfor %}</ul></details>
+  </div>
+</div>
+{% endblock %}
