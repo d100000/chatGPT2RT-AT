@@ -98,6 +98,8 @@ h3 { margin: 0; font-size: 13px; font-weight: 600; }
 .author-services-label { display: flex; align-items: center; flex-wrap: wrap; gap: var(--space-xs); color: var(--promotion-gold); font-size: 11px; font-weight: 600; }
 .author-services-label svg { width: 18px; height: 18px; }
 .promotion-label { padding: 0 5px; border: 1px solid var(--promotion-rule); border-radius: 3px; color: var(--promotion-muted); font-size: 10px; font-weight: 400; line-height: 1.8; }
+.promotion-quality-badge { display: inline-flex; align-items: center; padding: 1px var(--space-xs); border-radius: var(--control-radius); color: var(--blue); background: var(--blue-soft); font-size: .9em; font-weight: 650; line-height: 1.6; vertical-align: middle; white-space: nowrap; }
+.author-services .promotion-quality-badge { color: var(--promotion-bg); background: var(--promotion-gold); }
 .promotion-details, .site-notice-trigger { display: inline-flex; align-items: center; justify-content: center; gap: 5px; min-height: 32px; border: 0; padding: 3px 0; color: var(--blue); background: transparent; font-size: 11px; white-space: nowrap; }
 .promotion-details:hover, .site-notice-trigger:hover { text-decoration: underline; }
 .author-services .promotion-details { min-height: var(--control-height); flex-shrink: 0; padding: 0 var(--space-sm); border-radius: var(--control-radius); color: var(--promotion-bg); background: var(--promotion-gold); font-size: 12px; font-weight: 650; }
