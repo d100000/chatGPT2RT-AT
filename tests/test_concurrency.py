@@ -74,16 +74,17 @@ class ConcurrentBatchTests(unittest.TestCase):
                 with self.lock:
                     self.active -= 1
 
-        # This scheduler harness polls every 10 ms and validates eight invalid
-        # submissions in one window. Keep limits on with explicit test budgets.
+        # This scheduler harness polls every 10 ms and exercises all ten
+        # concurrency options in one window. Keep explicit test budgets.
         self.app = create_app(
             self.output,
             extractor=dispatch,
             abuse_policy=AbusePolicy(
                 burst=Quota(1000, 1),
                 global_burst=Quota(1000, 1),
-                device=ClientPolicy(burst=Quota(1000, 1), submissions=Quota(10, 60)),
-                session=ClientPolicy(burst=Quota(1000, 1), submissions=Quota(10, 60)),
+                submissions=Quota(20, 60),
+                device=ClientPolicy(burst=Quota(1000, 1), submissions=Quota(20, 60)),
+                session=ClientPolicy(burst=Quota(1000, 1), submissions=Quota(20, 60)),
             ),
         )
         self.app.config["TESTING"] = True
@@ -137,7 +138,7 @@ class ConcurrentBatchTests(unittest.TestCase):
             self.assertNotIn(value, text)
 
     def test_invalid_concurrency_rejects_before_starting_any_account(self):
-        for value in (True, False, None, "2", 2.0, 0, -1, 4, [], {}):
+        for value in (True, False, None, "2", 2.0, 0, -1, 11, [], {}):
             with self.subTest(value_type=type(value).__name__, value=str(value)):
                 response = self.client.post(
                     "/api/batches", json={"accounts_text": account_line("valid@example.com"), "concurrency": value},
@@ -150,7 +151,7 @@ class ConcurrentBatchTests(unittest.TestCase):
         self.assertEqual(list(self.output.rglob("*.json")), [])
 
     def test_default_two_and_each_selected_limit_are_actually_bounded(self):
-        for setting, expected in ((OMITTED, 2), (1, 1), (2, 2), (3, 3)):
+        for setting, expected in [(OMITTED, 2), *[(value, value) for value in range(1, 11)]]:
             with self.subTest(concurrency=expected, omitted=setting is OMITTED):
                 release = self.gate()
                 with self.lock:
@@ -162,7 +163,8 @@ class ConcurrentBatchTests(unittest.TestCase):
                     return bundle(email)
 
                 self.behavior = blocked
-                emails = [f"person{i}@example.com" for i in range(6)]
+                label = "default" if setting is OMITTED else str(setting)
+                emails = [f"group{label}-person{i}@example.com" for i in range(max(6, expected + 2))]
                 batch_id = self.start(emails, concurrency=setting)
 
                 def at_limit(state):

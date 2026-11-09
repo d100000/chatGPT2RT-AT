@@ -11,7 +11,7 @@ import time
 import weakref
 
 from .abuse import AbuseLimited
-from .batch import BatchManager
+from .batch import MAX_CONCURRENCY, BatchManager
 from .web_jobs import ACTIVE, JobManager
 
 
@@ -72,7 +72,7 @@ class Workspace:
 
 class WorkspaceRegistry:
     def __init__(self, extractor, *, clock=time.monotonic, max_workspaces=8,
-                 worker_limit=6, result_ttl=600, idle_ttl=600):
+                 worker_limit=MAX_CONCURRENCY, result_ttl=600, idle_ttl=600):
         self.extractor, self.clock = extractor, clock
         self.max_workspaces, self.result_ttl, self.idle_ttl = max_workspaces, result_ttl, idle_ttl
         self.worker_slots = threading.BoundedSemaphore(worker_limit)

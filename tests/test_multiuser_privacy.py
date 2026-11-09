@@ -639,10 +639,10 @@ class MultiuserPrivacyTests(unittest.TestCase):
                 response = client.post(
                     "/api/batches",
                     json={
-                        "concurrency": 3,
+                        "concurrency": 5,
                         "accounts_text": "\n".join(
                             f"worker{number}-{row}@example.com----synthetic-password----JBSWY3DPEHPK3PXP"
-                            for row in range(3)
+                            for row in range(5)
                         ),
                     },
                     headers=headers,
@@ -656,15 +656,16 @@ class MultiuserPrivacyTests(unittest.TestCase):
                         break
                 time.sleep(0.005)
             with lock:
-                self.assertEqual(active, 6)
-                self.assertEqual(peak, 6)
+                self.assertEqual(registry.worker_limit, 10)
+                self.assertEqual(active, 10)
+                self.assertEqual(peak, 10)
         finally:
             release.set()
         for (client, headers), batch_id in zip(browsers, batches):
             done = self.wait(client, headers, f"/api/batches/{batch_id}", {"completed"})
-            self.assertEqual(done["counts"]["success"], 3)
+            self.assertEqual(done["counts"]["success"], 5)
         self.assertEqual(active, 0)
-        self.assertLessEqual(peak, 6)
+        self.assertLessEqual(peak, 10)
 
     def test_clear_waits_for_admission_and_cannot_leave_a_detached_task(self):
         from concurrent.futures import ThreadPoolExecutor

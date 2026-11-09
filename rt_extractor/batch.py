@@ -21,7 +21,7 @@ from .web_jobs import ACTIVE, Job, JobManager, _credentials, converted_result
 
 MAX_ACCOUNTS = 1000
 DEFAULT_CONCURRENCY = 2
-MAX_CONCURRENCY = 3
+MAX_CONCURRENCY = 10
 _CONVERSION_ERROR = "批量 CPA / Sub2API 自动生成失败；单账号文件已保留，可重试下载或检查输出目录权限"
 _ID = re.compile(r"[0-9a-f]{32}")
 _TERMINAL_BATCH = {"completed", "cancelled"}

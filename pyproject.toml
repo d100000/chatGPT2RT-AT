@@ -22,6 +22,7 @@ Issues = "https://github.com/d100000/chatGPT2RT-AT/issues"
 [project.scripts]
 rt-extractor = "rt_extractor.__main__:main"
 rt-extractor-web = "rt_extractor.web:main"
+rt-extractor-batch = "rt_extractor.batch_cli:main"
 
 [tool.setuptools]
 packages = ["rt_extractor", "rt_extractor._protocol"]
