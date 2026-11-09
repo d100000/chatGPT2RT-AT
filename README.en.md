@@ -1,24 +1,42 @@
-# bob ai tools: ChatGPT Token Extraction for RT, AT and ID Token
+<h1 align="center">bob ai tools</h1>
 
-[简体中文](README.md) · [English](README.en.md) · [Project website](https://tools.bob-api.com/) · [Source repository](https://github.com/d100000/chatGPT2RT-AT)
+<p align="center">Token extraction · Authentication file conversion · Model evaluation</p>
 
-**bob ai tools signs in to an existing, authorized ChatGPT account and exports its Refresh Token (RT), Access Token (AT) and ID Token.** It provides a local web workbench, a single-account CLI and a Python API, plus CPA ↔ Sub2API conversion and browser IP diagnostics.
+<p align="center">
+  <img src="https://img.shields.io/badge/Python-3.10%2B-3776AB?logo=python&logoColor=white" alt="Python 3.10+">
+  <img src="https://img.shields.io/badge/Flask-3.1%2B-000000?logo=flask&logoColor=white" alt="Flask 3.1+">
+  <img src="https://img.shields.io/badge/JavaScript-ES%20modules-F7DF1E?logo=javascript&logoColor=black" alt="JavaScript ES modules">
+</p>
 
-This is an independent, unofficial project with no affiliation with or endorsement from OpenAI. Account tokens are not OpenAI API keys. The project does not create API keys, register accounts, bypass verification or automatically renew refresh tokens. Login compatibility depends on the upstream authentication service.
+<p align="center">
+  <a href="README.md">简体中文</a> · <a href="README.en.md">English</a> ·
+  <a href="https://tools.bob-api.com/">Project website</a> ·
+  <a href="https://github.com/d100000/chatGPT2RT-AT/issues">Report an issue</a>
+</p>
+
+## Overview
+
+**A local web workbench for ChatGPT account tokens, authentication files and model testing.** Sign in to an account you own or are authorized to use, receive RT / AT / ID Token, and export CPA or Sub2API files. The same app includes browser IP diagnostics, repeated SVG evaluations and concurrency benchmarks.
+
+The project is independent and unofficial, with no affiliation with or endorsement from OpenAI. Account tokens are not OpenAI API keys. Login compatibility depends on the upstream authentication service; the tool does not register accounts or automatically renew refresh tokens.
+
+[Quick start](#quick-start) · [Token workflow](#extract-rt-and-at-through-the-web-interface) · [Data handling](#data-handling-and-limits) · [Documentation](#documentation) · [Development](#development-and-tests)
 
 ## Choose a workflow
 
-| Goal | Workflow | Output |
+| Tool | Route | What it does |
 | --- | --- | --- |
-| Extract ChatGPT refresh and access tokens | Sign in with an account you own or are authorized to use; complete required verification | Original JSON with AT, RT and ID Token; CPA JSON; Sub2API JSON |
-| Convert existing authentication files | Import JSON in the browser converter | Merged Sub2API JSON, individual CPA files or ZIP |
-| Inspect the browser's network exit | Request IPOK diagnostics from the browser | IP location, available risk score and source evidence |
+| Token extraction | `/` | Batch login, email-code handling, complete RT / AT / ID Token results and browser-generated exports |
+| Authentication converter | `/converter` | Convert existing CPA ↔ Sub2API JSON in the browser, including recently received extraction results |
+| IP diagnostics | `/network` | Inspect the browser's exit IP, location, available IPOK risk score and supporting evidence |
+| Pelican evaluation | `/pelican` | Repeat an SVG generation task, compare samples, collect human or optional AI reviews and export reports |
+| Concurrency benchmark | `/benchmark` | Compare models across concurrency levels and input modes using latency, throughput, success and cache metrics |
 
-Conversion maps existing fields. It neither refreshes credentials nor proves that a token is still valid. Browser IP diagnostics describe the browser's exit, which may differ from the proxy used by the Python login process.
+Token extraction also has a single-account CLI and Python API. Model evaluation and benchmarking use an API connection you configure separately.
 
 ## Quick start
 
-Requirements: **Python 3.10+**; Python 3.12 is recommended. Run the following commands on macOS or Linux:
+Requires **Python 3.10+**. Python 3.12 is recommended. On macOS or Linux:
 
 ```bash
 git clone https://github.com/d100000/chatGPT2RT-AT.git
@@ -28,102 +46,178 @@ python3 -m venv .venv
 .venv/bin/python -m rt_extractor.web --port 8765
 ```
 
-Open [http://127.0.0.1:8765](http://127.0.0.1:8765). The three workbench routes are `/` for token extraction, `/converter` for file conversion and `/network` for IP diagnostics. The server binds to loopback and checks Host, Origin and session-bound CSRF. Signed browser sessions own separate workspaces; this is not a public user login or administrator system.
+Open **[http://127.0.0.1:8765](http://127.0.0.1:8765)**. All five tools are available from the navigation.
 
-On Windows, create the environment with `python -m venv .venv` and replace `.venv/bin/python` with `.venv\Scripts\python.exe`.
+<details>
+<summary>Windows / PowerShell</summary>
+
+```powershell
+git clone https://github.com/d100000/chatGPT2RT-AT.git
+cd chatGPT2RT-AT
+python -m venv .venv
+.venv\Scripts\python.exe -m pip install ".[web]"
+.venv\Scripts\python.exe -m rt_extractor.web --port 8765
+```
+
+For the remaining commands, replace `.venv/bin/python` with `.venv\Scripts\python.exe`. Calling the environment's interpreter directly does not require activating it.
+
+</details>
+
+The server binds to loopback and checks Host, Origin and session-bound CSRF. Signed browser sessions own separate workspaces; the app does not provide public user accounts or an administrator login. Deployment and update details are in [MAINTAINERS.md](docs/MAINTAINERS.md).
 
 ## Extract RT and AT through the web interface
 
-1. Paste one account per line or import a UTF-8 `.txt` file.
-2. Use four hyphens between the email, password and Authenticator 2FA secret. Replace all placeholders below.
-3. Choose concurrency: **2 by default, from 1 to 3**. A batch accepts at most **1,000 accounts and 2 MiB of input text**.
-4. Start extraction and complete any additional email verification requested by the service. Waiting for a verification code occupies a worker slot.
-5. On success, view or copy RT, download an account's original JSON or CPA file, or download batch CPA ZIP / Sub2API JSON.
+1. Paste an account list or import a UTF-8 `.txt` file. Use four hyphens between each field:
 
-```text
-user@example.com----YOUR_PASSWORD----YOUR_BASE32_SECRET
-```
+   ```text
+   user@example.com----YOUR_PASSWORD----YOUR_BASE32_SECRET
+   ```
 
-The web form requires a Base32 2FA secret or supported `otpauth://totp/` URI. It accepts SHA1, six digits and a 30-second period. All three tokens must be present before extraction is marked successful. Failure or cancellation does not discard already successful outputs.
+2. Choose **1–3 concurrent accounts**, with **2** selected by default. A batch accepts up to **1,000 accounts and 2 MiB of input text**.
+3. If needed, enter a shared proxy under connection settings, then start the batch.
+4. Follow each account's progress. Enter a requested email code, skip that account, or enable automatic email-verification skipping.
+5. Once a successful result reaches this browser, view or copy RT and download the account's original JSON or CPA JSON.
+6. Export received successes as merged Sub2API JSON, CPA ZIP, original-result ZIP or one RT per line. You can also open them directly in the converter.
+
+The web form requires a Base32 2FA secret or supported `otpauth://totp/` URI. Supported settings are SHA1, six digits and a 30-second period. An account is successful only when **all three tokens** are present. One failure does not stop the remaining queue.
+
+### Skip accounts that require email verification
+
+The **Skip email verification** switch is **off by default**. Turn it on before starting or while a batch is running:
+
+- Currently waiting email challenges and future email challenges end that account's extraction as **Skipped**.
+- The worker completes cleanup, releases its slot and continues with the next queued account.
+- **Skip this account** performs the same action for one waiting email challenge while leaving the batch setting unchanged.
+- Turning the switch off restores normal email-code prompts for future challenges; already skipped accounts are not resumed.
+
+**Skipped accounts produce no Token result.** This skips the account, not the authentication service's requirement. Authenticator / TOTP handling is unchanged. Skipped, failed and cancelled accounts have separate states; completed progress includes skipped accounts.
+
+### Results and exports
+
+Downloads use successful results **already received by the current browser**; they do not require the entire batch to finish. Failed, skipped and unfinished accounts do not contribute Token files. The original-result ZIP also includes a manifest of account statuses.
+
+Results and exports retain input order even when accounts finish in a different order. Cancelling a batch preserves received successes. Use **End task and clear** to stop the current session's extraction and clear its browser results.
+
+`expires_at` describes AT expiry, not RT lifetime. Token claims are displayed as metadata; parsing them does not verify their signature or prove that authentication remains valid.
+
+## Converter, diagnostics and evaluation
+
+### CPA ↔ Sub2API conversion
+
+Import or paste authentication JSON at `/converter`, or load recent extraction results. The converter supports Codex/OpenAI, Claude, Antigravity and Gemini formats, with merged JSON, individual CPA files and ZIP downloads.
+
+Manually imported content is processed in page memory. Conversion maps existing fields: it does not log in, refresh credentials or check whether a Token is valid. See the [technical reference](docs/REFERENCE.md) for supported fields, limits and examples.
+
+### Browser IP diagnostics
+
+`/network` requests IPOK diagnostics directly from the browser. It displays the available location, official risk score and evidence status. The browser's network exit can differ from the proxy used by the Python login process; an unavailable score is not a clean-IP result.
+
+### Pelican SVG evaluation
+
+`/pelican` runs the “pelican riding a bicycle” SVG task through a configured Responses or Chat Completions endpoint. It supports single runs, batches, scheduled repetition, continuous loops, sample comparisons, human scoring, blind reviews and optional AI image reviews.
+
+History includes original outputs, technical checks and review evidence, with JSON / CSV / HTML / SVG exports. This is a specific visual-task evaluation, not an IQ test, general intelligence score or proof of upstream model identity. See [the Pelican guide](docs/PELICAN.md) for rules and storage details.
+
+### Concurrency benchmarks
+
+`/benchmark` compares selected models, concurrency levels and input modes. Reports cover time to first visible output, latency distributions, throughput, success rate and provider-reported cache usage. Responses and Chat Completions are supported, with HTML / CSV / JSON exports.
+
+Benchmark and Pelican jobs continue on the server when you switch tools, refresh or close the page. Stop them explicitly when finished. Cancelling a local request cannot guarantee that the upstream service stops computation or billing. Metric definitions, history behavior and mock tests are in [the benchmark guide](docs/benchmark.md).
+
+## Data handling and limits
+
+**Token extraction uses temporary server memory and a browser result cache. Evaluation tools have separate persistent history.** Their storage rules are different:
+
+| Data | Processing and retention |
+| --- | --- |
+| Token extraction credentials | Temporarily processed by the Python server; passwords and 2FA secrets are not written to browser persistence or Token result files |
+| Token results in the browser | Session-owner-scoped `localStorage`, valid for **30 minutes**; shared across tabs with Web Locks coordinating receipt and clearing. Blocked or unsupported storage falls back to page memory |
+| Token results on the server | Memory only; acknowledged results are cleared. Uncollected results and terminal tasks expire after **10 minutes**; active workspaces idle for 10 minutes are cancelled and cleared |
+| Manually imported converter files | Parsed and converted in page memory; authentication contents are not uploaded or written to browser storage |
+| IP diagnostics | Browser `sessionStorage` caches diagnostics and cooldown information |
+| Pelican history | Persistent SQLite at `~/.local/share/bob-ai-tools/pelican/pelican.sqlite3`; configurable with `GPT_EVAL_DATA_DIR` |
+| Benchmark history | Persistent JSON under `~/.local/share/bob-ai-tools/benchmark/`, including batch summaries and request records; configurable with `GPT_BENCHMARK_DATA_DIR` |
+| Evaluation API keys | Used in input fields and server memory; not saved in browser storage, evaluation history or exports. A benchmark shared connection may retain its key in process memory until cleared or restarted |
+| CLI / Python output | Explicit save calls write plaintext JSON atomically, with POSIX `0600` permissions |
+| Session identity | Signed anonymous cookies enforce ownership and quotas; no hardware fingerprinting. People sharing a browser profile share its session identity |
+
+The Token browser cache contains full credentials and is readable by scripts on the same origin. It is not a permanent backup. Expired entries are removed while the page runs or on its next read; closing all tabs does not schedule physical deletion from browser storage. Download needed results and clear them after use.
+
+Restarting the service cannot restore active Token logins or uncollected Token results. Evaluation history survives separately; access depends on retaining the corresponding history identity and browser cookies. Upgrades do not automatically delete legacy Token files or evaluation history.
+
+Task state and quotas use a **single application process**. Multiple independent workers do not share scheduling or quotas. Limits apply by IP, anonymous device, session, account and operation; HTTP 429 responses provide a retry delay. The [technical reference](docs/REFERENCE.md) and [security policy](SECURITY.md) describe capacities and controls.
 
 ## Single-account CLI and Python API
 
-The CLI hides password and 2FA input. An empty secret allows interactive entry of the current Authenticator code when required:
+For one authorized account, run:
 
 ```bash
 .venv/bin/python -m rt_extractor --email you@example.com --output tokens.json
 ```
 
-For unattended use, create a private local `account.json`, then run:
+Password and 2FA prompts are hidden. Leaving the secret empty allows interactive entry of an Authenticator code when requested. Existing output files require an explicit `--overwrite` to replace them.
+
+For unattended use, create a private local input file and run:
 
 ```bash
 .venv/bin/python -m rt_extractor --input account.json --output tokens.json --non-interactive
 ```
 
-The input fields are `email`, `password`, optional `totp_secret` and optional `proxy`. Environment variables `RT_EMAIL`, `RT_PASSWORD`, `RT_TOTP_SECRET`, `RT_TOTP_CODE` and `RT_PROXY` are also supported. When `--input` is supplied, account credentials are not mixed with environment variables. Do not commit the input file. Existing output files are not overwritten unless `--overwrite` is explicitly passed.
+The Python API exposes async `extract_tokens(...)` and `extract_and_save(...)`, plus `save_tokens(...)`. CLI and public API calls process one account at a time; the email-skip switch belongs to the web batch workflow. Full input examples, environment variables, callbacks and error types are in [CLI and Python reference](docs/REFERENCE.md#命令行与-python-接口) (Chinese).
 
-```python
-import asyncio
-import os
-from rt_extractor import extract_and_save
+## Documentation
 
-async def main():
-    await extract_and_save(
-        os.environ["RT_EMAIL"],
-        os.environ["RT_PASSWORD"],
-        "tokens.json",
-        totp_secret=os.environ["RT_TOTP_SECRET"],
-        timeout=180,
-    )
-
-asyncio.run(main())
-```
-
-`extract_tokens(...)` returns a `TokenBundle` without writing files; `extract_and_save(...)` saves the result; `save_tokens(...)` saves an existing result. The CLI and public Python API handle one account per call. See the [full API and CLI documentation](README.md#命令行与-python-接口) for callbacks and failure types.
-
-## Data handling and limits
-
-| Data or operation | Actual behavior |
+| Document | Contents |
 | --- | --- |
-| Imported conversion JSON | Parsed in page memory; authentication contents are not uploaded or written to browser storage |
-| Web token extraction | Credentials and results are processed temporarily in server memory. Results are handed to the owning browser; no token, account-history or result files are written by the web service |
-| Passwords and 2FA secrets | Not stored in browser persistence or included in result files; a user-created input file still contains its own secrets |
-| Browser result cache | Owner-scoped `localStorage`, valid for 30 minutes and shared by tabs in the same browser session. Web Locks coordinate receipt and clearing; unsupported/blocked storage has explicit fallback limits. Downloads are generated in the browser |
-| Server handoff | Successful browser receipt is acknowledged and clears the temporary result; uncollected terminal tasks expire after 10 minutes. Idle active workspaces are cancelled after 10 minutes |
-| CLI result files | Explicit `--output` / Python save calls still write plaintext JSON atomically with POSIX `0600` permissions |
-| Workspace isolation | Every task operation checks the signed browser session. Another session receives 404 even with a known task ID; missing or forged session cookies are rejected |
-| Conversion capacity | Up to 1,000 files/accounts, 2 MiB per document and 20 MiB total |
-| Abuse prevention | IP, anonymous browser device, session, account and global quotas; HTTP 429 includes a retry delay |
-| Device identification | Signed anonymous cookies, not hardware fingerprints; quota state and signing keys reset when the process restarts |
-| Deployment | One process holds task state. Multiple independent workers do not share tasks or quotas |
+| [Token guide](docs/TOKEN-GUIDE.md) | Account input, extraction and export workflow |
+| [Technical reference](docs/REFERENCE.md) | Token definitions, file formats, fields, CLI / API examples and detailed limits |
+| [Pelican evaluation](docs/PELICAN.md) | Task rules, scoring, history and SVG validation |
+| [Concurrency benchmarks](docs/benchmark.md) | Configuration, metric definitions, storage and exports |
+| [FAQ](docs/FAQ.md) | Common setup, authentication and result questions |
+| [Stalled batch troubleshooting](docs/BATCH-TROUBLESHOOTING.md) | Stale progress after task expiry, preserved results and recovery steps |
+| [Maintenance](docs/MAINTAINERS.md) | Deployment, upgrades and troubleshooting |
+| [Security](SECURITY.md) | Session isolation, request limits and reporting guidance |
 
-An AT expiration timestamp does not state the lifetime of RT. Tokens can be revoked by the issuing service, and a converted file is not a successful authentication test. See [security controls](SECURITY.md), the [token guide](docs/TOKEN-GUIDE.md), [FAQ](docs/FAQ.md) and [deployment/update notes](docs/MAINTAINERS.md).
+Detailed guides are currently in Chinese. The app also serves public documentation at `/docs`, `/docs/token-extraction`, `/docs/token-types`, `/docs/cpa-sub2api` and `/docs/faq`. These routes depend on the deployed version; this README does not verify the live website's deployment state.
 
-The browser cache contains full credentials, is readable by scripts on the same origin, and is not a permanent backup. Expired entries are removed while the page runs or on its next read; closing every tab does not schedule physical deletion from browser storage. Download needed results promptly and clear them after use. People sharing one browser profile also share its session identity; use separate profiles. Restarting the service cannot restore active logins or uncollected results. Legacy output files are no longer loaded by the web service and are not automatically deleted during an upgrade.
+<a id="tests"></a>
+## Development and tests
 
-## Updating an existing installation
-
-Update the code and installed package used by the service, then restart that actual Python/Gunicorn process or rebuild and restart its container. Reload the browser afterward. Pulling code without reloading the running app can leave cached HTML templates paired with new module scripts and cause `Cannot use import statement outside a module`. Restarting Nginx alone does not reload Python templates.
-
-## Tests
+Install the web dependencies, then run from the repository root:
 
 ```bash
 .venv/bin/python -m unittest discover -s tests -v
 node --test tests/*.mjs
 ```
 
-Tests use synthetic accounts and mocked network responses, not real account logins. Node.js is needed for frontend tests and an optional authentication VM fallback, not for browser file conversion.
+Tests use synthetic accounts and mocked responses or local mock servers, without real account logins or paid model calls. Node.js is required for frontend tests and an optional authentication VM fallback, not for browser conversion. Optional browser checks are documented in the individual evaluation guides.
+
+```text
+rt_extractor/    Python services, login protocol, templates and browser modules
+tests/          Python, JavaScript and optional browser tests
+docs/           User guides, technical reference and maintenance notes
+```
+
+## Updating an existing installation
+
+Update the checkout and reinstall the package in the environment used by the running service:
+
+```bash
+git pull --ff-only
+.venv/bin/python -m pip install '.[web]'
+```
+
+Then restart the actual Python / Gunicorn service and reload the browser. Pulling code without restarting can pair cached HTML templates with new module scripts and cause `Cannot use import statement outside a module`. Restarting Nginx alone does not reload Python templates. See [maintenance notes](docs/MAINTAINERS.md) for your deployment's update path.
 
 ## Source, attribution and license status
 
-The source is publicly available. **A project-wide license has not yet been declared**; public visibility alone does not grant unrestricted reuse or redistribution rights. Do not assume that the entire project is MIT licensed.
+Source is publicly available, but **a project-wide license has not yet been declared**. Public visibility alone does not grant unrestricted reuse or redistribution rights. The MIT notice for a bundled third-party component does not license the entire project.
 
-The converter is adapted from [CPA2sub2API](https://github.com/gtxx3600/CPA2sub2API) at commit `42ff785`. Its MIT notice is preserved in [THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md). Login protocol provenance and implementation boundaries are documented in the [Chinese README](README.md#数据保存与运行限制).
-
-The project also supplies public documentation routes at `/docs`, `/docs/token-extraction`, `/docs/token-types`, `/docs/cpa-sub2api` and `/docs/faq`. Availability depends on deployment of the current version; this README is not an assertion that the live site has been updated. The [SEO / GEO plan](docs/SEO-GEO-PLAN.md) records discoverability work and follow-up measurement.
+The converter is adapted from [CPA2sub2API](https://github.com/gtxx3600/CPA2sub2API), commit `42ff785`. Its license and modification notes are preserved in [THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md). Login protocol code was separated from the original project's `botcore/protocol_register`; implementation boundaries are described in the [technical reference](docs/REFERENCE.md).
 
 ## Help and contact
 
-- [Report a reproducible issue](https://github.com/d100000/chatGPT2RT-AT/issues) with the version and redacted errors; never include passwords, 2FA secrets or tokens.
+- [Report a reproducible issue](https://github.com/d100000/chatGPT2RT-AT/issues) with the version and redacted errors; omit account credentials, API keys and Tokens.
 - Author: [bbo_dong@qq.com](mailto:bbo_dong@qq.com)
 - QQ discussion group: **916444032**
+- Repository: [d100000/chatGPT2RT-AT](https://github.com/d100000/chatGPT2RT-AT)

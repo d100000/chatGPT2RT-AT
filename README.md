@@ -1,63 +1,50 @@
-# bob ai工具：ChatGPT / GPT Token 提取（RT、AT、ID Token）
+<div align="center">
 
-**Bob AI，只做最靠谱的 AI。**
+# bob ai工具
 
-[简体中文](README.md) · [English](README.en.md) · [项目网站](https://tools.bob-api.com/) · [GitHub 源码](https://github.com/d100000/chatGPT2RT-AT)
+**ChatGPT Token 提取 · CPA / Sub2API 转换 · 模型能力评测与并发分析**
 
-**bob ai工具用于登录已有且获授权的 ChatGPT 账号，提取 Refresh Token（RT）、Access Token（AT）和 ID Token，并导出原始 JSON、CPA 与 Sub2API 文件。** 项目同时提供浏览器本地格式转换和 IP 纯净度检测，支持网页、单账号命令行及 Python API。
+把账号认证、文件转换和接口测试放在同一个本地工作台。
 
-这是独立开发的非官方工具，与 OpenAI 无隶属或背书关系。这里的“GPT 提取 Token”“提取 RT / AT”指账号登录后的认证结果，**不是创建 OpenAI API Key**；格式转换不会刷新 Token，也不保证凭据仍有效。网页结果仅缓存在当前浏览器会话中，服务器临时处理登录和结果交接，不写入结果文件。源码公开，主项目许可证状态见[来源与许可](#来源与许可)。
+[![Python](https://img.shields.io/badge/Python-3.10%2B-3776AB?logo=python&logoColor=white)](pyproject.toml)
+[![Flask](https://img.shields.io/badge/Flask-3.1%2B-000000?logo=flask&logoColor=white)](pyproject.toml)
+[![JavaScript](https://img.shields.io/badge/JavaScript-ES_Modules-F7DF1E?logo=javascript&logoColor=black)](rt_extractor/static/)
 
-| 你要完成的事 | 对应功能 | 说明文档 |
-| --- | --- | --- |
-| 获取 ChatGPT RT、AT 和 ID Token | Token 获取：网页批量、CLI / Python 单账号 | [Token 提取指南](docs/TOKEN-GUIDE.md) |
-| 转换已有 CPA / Sub2API 认证 JSON | CPA ↔ Sub2API 浏览器本地转换 | [转换与字段映射](#cpa--sub2api-格式转换) |
-| 了解当前浏览器出口的风险证据 | IPOK IP 纯净度检测 | [IP 检测说明](#ip-纯净度检测) |
-| 重复生成鹈鹕骑自行车 SVG、人工评分与对比 | GPT 能力评测 · 鹈鹕题库 `/pelican` | [完整操作、保存与测试说明](docs/PELICAN.md) |
+简体中文 · [English](README.en.md)
 
-```text
-邮箱 + 密码 + 2FA → 登录验证 → 获取 AT / RT / ID Token → 原始 JSON / Sub2API / CPA
-已有认证 JSON → 浏览器本地转换 → CPA 单文件 / CPA ZIP / Sub2API JSON
-```
+[项目网站](https://tools.bob-api.com/) · [快速开始](#快速开始) · [功能概览](#功能概览) · [文档导航](#文档导航) · [问题反馈](https://github.com/d100000/chatGPT2RT-AT/issues)
 
-## 文档导航
+</div>
 
-[快速开始](#快速开始) · [RT / AT 术语](#token-types) · [输入格式](#账号输入格式) · [结果与下载](#查看结果与下载) · [CLI / Python](#命令行与-python-接口) · [隐私与保存](#使用声明与隐私) · [防刷策略](SECURITY.md) · [常见问题](docs/FAQ.md) · [维护与更新](docs/MAINTAINERS.md) · [SEO / GEO 方案](docs/SEO-GEO-PLAN.md)
+## 项目介绍
 
-<a id="token-types"></a>
-## RT、AT 和 ID Token 有什么区别？
+**bob ai工具**用于登录已有且获授权的 ChatGPT 账号，取得 Refresh Token（RT）、Access Token（AT）和 ID Token，并导出原始 JSON、CPA 与 Sub2API 认证文件。已有文件可直接在浏览器中转换，无需重新登录。
 
-| 名称 | 完整名称 / 导出字段 | 本项目中的含义 |
-| --- | --- | --- |
-| RT | Refresh Token / `refresh_token` | 认证服务签发的刷新凭据；本项目提取并导出它，不提供 RT 自动续期功能 |
-| AT | Access Token / `access_token` | 用于访问授权资源的访问令牌；导出中的 `expires_at` 描述 AT 到期时间 |
-| ID Token | ID Token / `id_token` | 包含登录身份相关 claims 的令牌；页面中的元数据解析不等于验证签名或认证有效性 |
-| API Key | API 密钥 | 与上述账号 Token 不同；本项目不会为账号创建 API Key |
+工作台还提供 IP 检测、鹈鹕 SVG 能力评测和多模型并发分析，便于在同一界面查看网络证据、比较生成结果和测量接口性能。后端使用 Python / Flask，前端使用原生 JavaScript，无需前端构建；Token 提取另提供单账号 CLI 与异步 Python API。
 
-术语背景见 [OAuth 2.0 的 AT / RT 定义](https://www.rfc-editor.org/rfc/rfc6749#section-1.4)与 [OpenID Connect 的 ID Token 定义](https://openid.net/specs/openid-connect-core-1_0.html#IDToken)。本项目的支持范围与实际代码为准，平台可能撤销凭据或改变登录要求。
+这是独立开发的非官方项目，与 OpenAI 无隶属或背书关系。账号 Token 与 API Key 不同；登录兼容性取决于上游认证服务。项目不提供自动注册、绕过认证或 RT 自动续期功能。
 
 ## 功能概览
 
-| 功能 | 说明 |
-| --- | --- |
-| 完整 Token 提取 | 同时保存 Access Token（AT）、Refresh Token（RT）和 ID Token；缺少任意一种时不标记为成功 |
-| 批量导入 | 网页支持粘贴账号列表或导入 UTF-8 `.txt` 文件，每批最多 1000 个账号、2 MiB 文本 |
-| 并发处理 | 默认同时处理 2 个账号，可选 1～3 个；空出名额后自动处理下一个账号 |
-| 验证码交互 | 使用 2FA 密钥生成动态码；遇到额外邮箱验证时，在对应账号下手动输入验证码 |
-| 查看与复制 RT | 成功账号旁提供「查看 RT」按钮，可显示完整内容、复制或关闭隐藏 |
-| 多种导出格式 | 支持 Sub2API JSON、CPA JSON / ZIP、原始 Token JSON、成功结果 ZIP，以及每行一个 RT 的文本 |
-| 双向格式转换 | 独立页面支持 CPA 与 Sub2API 互转，兼容 Codex/OpenAI、Claude、Antigravity、Gemini；认证内容在浏览器内处理 |
-| 浏览器结果与下载 | 结果交接到当前浏览器会话缓存，原始、CPA、Sub2API JSON、ZIP 与 RT 文本均在浏览器生成；服务器不保存结果文件 |
-| IP 纯净度检测 | 浏览器自动调用 IPOK 官方接口，显示当前出口、官方风险值、纯净度标签和证据状态；共享侧栏摘要与独立详情页 |
-| 全局使用声明 | 三个页面共用声明与 7 天确认记忆，包含隐私说明、开源地址和 QQ 群号复制；支持键盘关闭与手机滚动查看 |
-| 进度与取消 | 分别显示账号状态和运行记录；单个账号失败继续处理，取消整批后保留成功结果 |
-| 限流等待 | 收到 HTTP 429 后暂停启动后续账号，显示等待时间；已运行账号继续处理 |
-| 防刷与防爆破 | 网页服务按来源、账号和操作限流，限制验证码尝试、批量账号处理量和导出并发；前端遵循冷却时间 |
-| 代理与独立调用 | 支持统一代理；提供单账号 CLI 和异步 Python API，可脱离原管理后台运行 |
+| 工具 | 可以做什么 | 入口 / 文档 |
+| --- | --- | --- |
+| **Token 获取** | 批量导入、并发登录、验证码交互、跳过邮箱验证账号、查看与复制 RT；导出原始 JSON、CPA、Sub2API、ZIP 和 RT 文本 | `/` · [提取指南](docs/TOKEN-GUIDE.md) |
+| **格式转换** | CPA ↔ Sub2API 双向转换；支持多文件、目录和粘贴 JSON，在浏览器内解析、预览和打包 | `/converter` · [字段映射](docs/REFERENCE.md#转换功能与字段映射) |
+| **IP 检测** | 查询浏览器出口或指定公网 IP，查看 IPOK 返回的归属地、风险信号与来源证据 | `/network` · [检测说明](docs/REFERENCE.md#ip-纯净度检测) |
+| **GPT 能力评测** | 鹈鹕骑自行车 SVG 单次、批量、定时与持续测试；人工评分、可选 AI 看图评分、历史对比与报告导出 | `/pelican` · [评测指南](docs/PELICAN.md) |
+| **并发分析** | 比较多个模型与并发档位的首字延迟、吞吐、成功率和缓存用量；支持后台任务与 HTML / CSV / JSON 报告 | `/benchmark` · [指标与操作](docs/benchmark.md) |
+
+Token 提取只在三类 Token 全部取得后标记成功；单个账号失败不会中断整批。切换工具页面不会停止已在服务端运行的任务。
 
 ## 快速开始
 
-需要 **Python 3.10+**，推荐 Python 3.12。以下命令以 macOS/Linux 为例，在终端中执行：
+### 环境要求
+
+- **Python 3.10+**，推荐 Python 3.12。
+- 浏览器需支持 JavaScript ES modules。
+- Node.js 用于前端测试及可选的认证 VM 回退；日常文件转换无需安装 Node.js。
+
+### macOS / Linux
 
 ```bash
 git clone https://github.com/d100000/chatGPT2RT-AT.git
@@ -68,388 +55,226 @@ python3 -m venv .venv
 .venv/bin/python -m rt_extractor.web --port 8765
 ```
 
-启动后打开 [http://127.0.0.1:8765](http://127.0.0.1:8765)。
+打开 **[http://127.0.0.1:8765](http://127.0.0.1:8765)**，从导航中选择工具。端口已被占用时，可将 `--port 8765` 改为 `--port 8766`。
 
-桌面左侧、手机顶部提供四个功能入口：**Token 获取**（`/`）、**格式转换**（`/converter`）、**IP 检测**（`/network`）、**GPT 能力评测**（`/pelican`）。切换工具不停止正在执行的任务。鹈鹕模块支持单次、批量、定时与持续循环、人工与可选 AI 看图评分、历史对比及 JSON / CSV / HTML / SVG 导出，详见 [使用说明](docs/PELICAN.md)。
+<details>
+<summary>Windows PowerShell</summary>
 
-能力评测的原始输出、评分与图片单独保存在本机 SQLite 历史库，API key 只留在内存；本 README 下文的 Token 临时缓存规则专指 Token 工具。评测默认只选择 `gpt-6.1-sol`，high / 16000 Token / 600 秒 / 流式，是否可用由实际接口决定。鹈鹕评分不代表 IQ、总体智力或上游模型身份。
+```powershell
+git clone https://github.com/d100000/chatGPT2RT-AT.git
+cd chatGPT2RT-AT
 
-Windows 创建虚拟环境时可使用 `python -m venv .venv`，后续将 `.venv/bin/python` 替换为 `.venv\Scripts\python.exe`。
-
-### 网页使用流程
-
-1. 粘贴账号列表，或点击「导入 .txt 文件」。
-2. 选择「同时处理账号数」；默认 2，选择 1 为逐条处理。
-3. 根据需要在「连接设置」中填写统一代理地址，然后开始提取。
-4. 查看各账号的处理状态；如需邮箱验证码，在对应邮箱下输入。
-5. 账号成功后可立即查看 RT、复制 RT，或下载该账号的原始 JSON、CPA JSON。
-6. 结果接收到当前浏览器后，可下载 CPA ZIP、合并 Sub2API JSON、原始结果 ZIP 或 RT 文本，文件在浏览器中生成。
-7. 点击「在转换工具中查看」，无需手动下载、重新上传；也可在转换页选择方向后点击「载入最近提取结果」。载入会替换当前转换结果，并保留原提取结果的套餐、刷新时间和有效期。
-
-## 使用声明与隐私
-
-**网页结果仅缓存在当前浏览器会话中，服务器不写入 Token、账号历史或结果文件。** 登录仍需由 Python 服务临时处理凭据与结果；浏览器缓存成功后通知服务清除临时结果，未接收结果也会过期。这不等同于“凭据不经过服务器”。推荐在自己控制的设备或可信服务器运行。
-
-首次进入 Token 获取、格式转换或 IP 检测中的任意页面时，都会显示同一份全局声明。点击「我已了解，开始使用」、关闭按钮或按 Esc 后，从该次操作起 **7 × 24 小时内不再提示**；到期后再次进入页面时重新显示。刷新、切换工具或打开同站点的新标签页会复用确认记录；在一个标签页确认，也会关闭其他标签页中已打开的声明。
-
-声明包含数据处理方式、**代码完全开源**说明、GitHub 源码链接及 QQ 群 **916444032**，支持复制群号。确认记忆和工具数据分别处理：
-
-升级到浏览器缓存版后，旧用户会先看到一次更新后的隐私声明，确认后继续按 7 天周期提示。
-
-| 数据 | 处理与保存方式 |
-| --- | --- |
-| 导入的转换文件与 Token | 仅在当前页面内存中解析和转换，不上传服务器、不写入浏览器存储；下载文件由使用者自行保管 |
-| 网页 Token 获取结果 | 使用按签名会话分区的浏览器 `localStorage` 缓存，30 分钟有效，同一浏览器的标签页可共享；服务器只临时使用内存，接收确认后清除，未接收结果到期清除 |
-| 输入的密码和 2FA 密钥 | 不写入浏览器持久化存储，也不写入 Token 结果文件 |
-| 声明确认记录 | 独立的 `localStorage` 键保存确认时间戳，该记录不包含账号、密码或 Token |
-| IP 检测记录 | 在 `sessionStorage` 中缓存检测资料和限流冷却时间，详见 [IP 纯净度检测](#ip-纯净度检测) |
-| 会话及防刷标识 | 两枚服务器签名的匿名 Cookie，用于任务归属校验与频率控制；不含账号或 Token，不采集硬件指纹，详见 [安全策略说明](SECURITY.md) |
-
-浏览器不允许写入 `localStorage` 时，声明确认记录会退回当前标签页的 `sessionStorage`；两者均不可用时仍能关闭弹窗，下次进入可能再次提示。结果缓存通过 Web Locks 协调多标签接收与清除；共享存储或锁不可用时提示降级限制，不让陌生标签抢先接收并清除服务器结果。结果含完整凭据；同一浏览器配置不适合多人共用，使用后请清除结果。CLI 显式保存文件的行为见[数据保存与运行限制](#数据保存与运行限制)。
-
-## CPA ↔ Sub2API 格式转换
-
-点击网页顶部「格式转换」，或打开 [http://127.0.0.1:8765/converter](http://127.0.0.1:8765/converter)。选择转换方向后，导入已有 JSON；此流程不需要重新登录账号。
-
-1. 选择 `CPA → Sub2API` 或 `Sub2API → CPA`。
-2. 拖入多个 JSON 文件、通过文件选择器选择文件或目录，或粘贴 JSON。粘贴支持单个对象、连续 JSON、JSONL；CPA 方向也可粘贴账号数组。
-3. 查看每条结果及失败、跳过原因，按需预览或下载单个结果。无效账号不会阻止其他有效账号转换。
-4. CPA 转 Sub2API 可下载合并 JSON，也可导出拆分文件；超过 3 个拆分结果时打成 ZIP。Sub2API 转 CPA 将每个可转换账号拆为一个 CPA 文件，批量下载为 ZIP。
-
-每次最多处理 1000 个文件或账号，单个文件不超过 2 MiB，导入总量不超过 20 MiB。切换方向或清空后，需要重新导入转换。转换结果仅保留在当前页面内存中，刷新或关闭页面后需要重新导入；不会写入浏览器本地存储，也不会上传认证内容到服务端。
-
-### 转换功能与字段映射
-
-本功能移植并适配自 [CPA2sub2API](https://github.com/gtxx3600/CPA2sub2API)，参考版本为 [`42ff785`](https://github.com/gtxx3600/CPA2sub2API/commit/42ff785d5f3527e4050c02a0da51d4f7eb4f1180)。参考项目的核心是纯前端文件解析、认证字段映射与下载打包；其转换逻辑不调用平台认证接口，也不刷新 Token。
-
-| CPA 类型 | Sub2API 平台 | 主要转换内容 |
-| --- | --- | --- |
-| `codex`（或缺省类型） | `openai` | AT、RT、ID Token、邮箱、账号 / 用户 / 组织标识、套餐与有效期；可从 JWT claims 补充元数据 |
-| `claude` | `anthropic` | AT、RT、邮箱、有效期及可选 ID Token |
-| `antigravity` | `antigravity` | AT、RT、邮箱、项目 ID、套餐、Token 类型与有效期 |
-| `gemini` | `gemini` | 嵌套 `token` 对象中的认证字段、scope、有效期，以及项目 ID、auto / checked 标记 |
-
-转换仅导出已知可映射字段，缺失的可选字段会省略。代理、Sub2API 调度配置和未知扩展字段不会完整往返保留。CPA 转 Sub2API 的账号默认包含 `concurrency: 10`、`priority: 1`；合并文档采用 `sub2api-data` v1 格式。反向转换只处理可映射到 CPA 的 OAuth 账号，其他账号在页面列出跳过原因。JWT claims 仅用于整理元数据，不验证签名或认证状态；转换成功不代表凭据仍然有效。
-
-重复导入的相同 JSON 内容会显示为已跳过，不受文件名、排版或对象键顺序影响。同邮箱更换 Token 后仍可继续导入；清空结果或切换方向会重置去重记录。粘贴内容仅在全部转换成功后清空，出现错误或达到上限时保留输入供修正。
-
-本项目还兼容自身导出的原始 Token JSON，将 `chatgpt_account_id`、`expires_at`、`obtained_at` 分别映射到 CPA 的 `account_id`、`expired`、`last_refresh`。提取页提供的 CPA 下载直接使用已保存结果，并保留实际取得时间和 AT 到期时间。浏览器转换器补充了秒 / 毫秒时间戳处理、UTF-8 JWT 解码及 ZIP 文件名去重与路径清理。
-
-相关前端模块保留原 MIT 许可及来源，见 [THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md)。
-
-## IP 纯净度检测
-
-工作台打开时，浏览器直接请求 IPOK 官方自查接口 `https://ipok.io/api/ip`，无需密钥。侧栏展示摘要，`/network` 展示详细归属地、运营商、网络类型、风险信号、逐源证据和查询额度。所有数据注明 [IPOK](https://ipok.io/) 来源；接口约定见 [官方开发文档](https://ipok.io/developers)。
-
-IP 详情页采用与工作台一致的蓝白配色和统一控件，参考 IPOK 截图布局，以风险圆环和资料面板集中展示类型、风险信号、共享人数估计、来源原生标签、归属地、时区、经纬度、组织、ASN、反向解析、逐源标记、评分依据与地区支持快照。共享人数不是实测人数；原生标签只反映来源的国家一致性资料；地区支持快照不是实时解锁测试。缺失字段显示「未知」，没有当前有效分数时圆环不显示数值。
-
-可填写公网 IPv4 / IPv6 查询指定地址，留空检测当前浏览器出口；试填地址按钮仅填写输入框，不自动请求。指定目标不会覆盖侧栏当前出口或自查缓存。支持复制显示的 IP，以及显隐其十进制数值。指定查询可能受到 IPOK 自身的验证和额度限制，页面会显示对应状态并保留来源入口。
-
-- 检测对象是**当前浏览器出口**。Token 获取表单中的统一代理只影响 Python 登录请求，不改变浏览器出口。
-- 风险值为 0–100，越低表示已返回的不利证据越弱；不将其反转为“纯净度百分比”。官方不提供当前有效评分时显示「证据不足」，有限证据和商业来源仅有缓存时也会注明。
-- 同一标签页跨工具复用 10 分钟内的检测资料，支持手动重新检测。IPOK 自查有每日额度；429 时按照 `Retry-After` 等待，无有效值时等待 60 秒。请求 20 秒超时，失败时清空旧分数并提供重试入口。
-- 仅 IP 检测事实及限流冷却时间保存于会话缓存；不会向 IPOK 发送账号、密码、2FA、Token 或本地页面凭据。认证文件转换与 IP 请求相互独立。
-
-## 账号输入格式
-
-每行一个账号，使用四个英文短横线 `----` 分隔：
-
-```text
-邮箱----密码----2FA密钥
+python -m venv .venv
+.\.venv\Scripts\python.exe -m pip install '.[web]'
+.\.venv\Scripts\python.exe -m rt_extractor.web --port 8765
 ```
 
-以下为占位示例，使用时需替换为实际账号信息：
+无需激活虚拟环境，直接使用其中的解释器即可。
+
+</details>
+
+服务绑定并仅接受本机访问，采用单进程、多线程运行。远程自用可使用 [SSH 隧道](SECURITY.md#服务器使用边界)；部署与更新说明见 [维护文档](docs/MAINTAINERS.md)。
+
+## 使用指南
+
+### 批量获取 Token
+
+<a id="账号输入格式"></a>
+
+1. 粘贴账号列表，或导入 UTF-8 `.txt` 文件，每行一个账号。
+2. 选择同时处理的账号数：默认 **2**，可选 **1～3**；每批最多 **1,000 个账号、2 MiB 文本**。
+3. 按需填写统一代理，点击开始，并在确认窗口核对连接方式。
+4. 查看各账号状态；遇到邮箱验证码时，输入验证码或跳过该账号。
+5. 成功结果接收到浏览器后，即可查看 RT 或下载文件，无需等待整批结束。
+
+输入格式使用四个英文短横线 `----` 分隔，下面均为占位值：
 
 ```text
 user1@example.com----YOUR_PASSWORD----YOUR_BASE32_SECRET
 user2@example.com----YOUR_PASSWORD----YOUR_BASE32_SECRET
 ```
 
-- 网页批量输入的三个字段均不能为空，2FA 支持 Base32 密钥或 `otpauth://totp/` URI。
-- `otpauth` URI 只接受 SHA1、6 位动态码、30 秒周期；机器时间应保持准确。
-- 支持 UTF-8 文本、文件开头的 BOM，忽略空行。字段中不能包含分隔符 `----`。
-- 邮箱和密钥两端的空白会移除，密码中的空格原样保留。
-- 开始前会校验全部行。格式错误、无效密钥或重复邮箱会按行号提示，整批不会启动；邮箱重复判断不区分大小写。
+三个字段均不能为空。2FA 支持 Base32 密钥或 `otpauth://totp/` URI，使用 SHA1、6 位动态码和 30 秒周期。开始前会检查全部行，格式错误、无效密钥或重复邮箱会阻止整批启动。更多规则见 [账号输入格式](docs/REFERENCE.md#账号输入格式)。
 
-## 并发、验证码和限流
+<a id="并发验证码和限流"></a>
+### 等待邮箱验证码时跳过账号
 
-| 设置 | 当前行为 |
+| 操作 | 行为 |
 | --- | --- |
-| 同时处理账号数 | 每个浏览器会话可选 1、2、3，默认 2；每会话同一时刻运行一个批次；全进程最多 6 个登录、8 个工作空间 |
-| 任务补位 | 账号结束后立即从队列领取下一个；单个账号失败不影响其他账号 |
-| 人工验证码 | 每个账号有独立表单；等待验证仍占用名额，其他名额继续运行 |
-| 单账号超时 | 网页默认 180 秒，包含人工验证码等待；CLI 可通过 `--timeout` 调整 |
-| 统一代理 | 适用于本批次全部账号；支持 HTTP、HTTPS、SOCKS5、SOCKS5H，留空直连 |
-| 取消整批 | 停止领取新账号、取消运行任务，等待收尾后结束，保留已成功的结果 |
+| **跳过邮箱验证**开关 | 默认关闭；开启后，当前等待及后续需要邮箱验证码的账号都会结束提取，释放名额继续队列；运行中可切换 |
+| **跳过此账号**按钮 | 仅跳过对应的邮箱验证码请求，其他账号继续处理 |
+| 关闭开关 | 后续邮箱验证恢复等待输入；已跳过的账号不会自动重试，可在批次结束后重新导入 |
 
-如果全部处理名额都在等待验证码，需要先完成验证才会继续派发。验证码可能过期，应在对应账号下及时提交。
+跳过的账号单独计入 **“已跳过”**，不会生成 Token。该开关不影响 Authenticator 动态码验证。默认每个账号总超时为 180 秒，包含人工验证码等待；取消整批会保留已成功结果。
 
-收到认证服务或 Sentinel 的 HTTP 429 时，限流账号记为失败，其余队列按照 `Retry-After` 等待后继续。无有效等待时间时默认等待 30 秒，等待范围为 1～900 秒。程序不会因此自动重新提交该账号的密码或验证码，可在批次结束后重新导入失败账号。
+<a id="查看结果与下载"></a>
+### 查看结果与下载
 
-取消采用协作方式。同步认证计算或 Node 子进程需要收尾时，页面会暂时显示「正在取消」；Node 单次调用上限为 30 秒。
+单账号可查看或复制 RT，下载原始 JSON、CPA JSON 或 Sub2API JSON。批量导出支持合并 Sub2API JSON、CPA ZIP、原始结果 ZIP 和每行一个 RT 的文本，按输入顺序整理已接收到浏览器的成功结果。原始 ZIP 的 `manifest.json` 另记录账号状态，包含失败、取消和跳过项。
 
-### 本站请求防护
+字段定义及完整样例见 [导出格式参考](docs/REFERENCE.md#查看结果与下载)。
 
-网页服务同时按 **IP、设备、Session、全局** 检查额度，直接调用 API 的脚本同样受限。“设备”指服务器签名 Cookie 识别的浏览器配置，不是物理硬件。IP 使用实际连接地址；当前仅允许本机访问，因此本机浏览器与脚本共享 IP 额度。
+### CPA ↔ Sub2API 格式转换
 
-| 操作 | 每 IP | 每设备 | 每 Session | 服务进程总额度 / 额外限制 |
-| --- | --- | --- | --- | --- |
-| 页面、状态查询及其他动态请求 | 600 次 / 分钟、120 次 / 秒 | 450 次 / 分钟、90 次 / 秒 | 300 次 / 分钟、60 次 / 秒 | 2400 次 / 分钟、240 次 / 秒 |
-| 静态资源（含不存在的资源） | 1200 次 / 分钟、240 次 / 秒 | 同 IP | 同 IP | 4800 次 / 分钟、480 次 / 秒；独立于动态请求 |
-| 提交单账号或批次 | 10 次 / 分钟 | 8 次 / 分钟 | 6 次 / 分钟 | 两个入口共享；合计 30 次 / 分钟 |
-| 账号处理量 | 2000 个 / 小时 | 1500 个 / 小时 | 1000 个 / 小时 | 5000 个 / 小时；批次按账号数量计费 |
-| 提交验证码 | 15 次 / 分钟 | 12 次 / 分钟 | 10 次 / 分钟 | 60 次 / 分钟；同一任务最多 5 次 / 分钟 |
-| 服务端结果交接 | 30 次 / 分钟 | 24 次 / 分钟 | 20 次 / 分钟 | 合计 120 次 / 分钟，最多同时读取 2 个响应；浏览器已接收结果的下载不调用此接口 |
-| 取消任务 / 批次 | 独立 60 次 / 分钟 | 独立 60 次 / 分钟 | 独立 60 次 / 分钟 | 独立 240 次 / 分钟 |
-| Host、Origin 或 CSRF 校验失败 | 10 次 / 5 分钟 | 10 次 / 5 分钟 | 10 次 / 5 分钟 | 超出返回 429，正确的访问校验仍可通过 |
-| 签发设备 / Session 标识 | 20 次 / 10 分钟 | — | — | 60 次 / 10 分钟，仅合法页面缺少有效标识时签发 |
+选择转换方向，导入 JSON 文件、目录或粘贴内容，即可预览、拆分、合并与下载。支持 Codex/OpenAI、Claude、Antigravity、Gemini 的已知认证字段；每次最多 1,000 个文件或账号，单文件 2 MiB，总量 20 MiB。
 
-同一邮箱另外受跨 IP、设备和 Session 合计 **5 次 / 15 分钟** 的提取限制，邮箱大小写不影响计数。合法标识在换 IP 后保持原额度，开新标签页复用浏览器会话。没有有效 Cookie 的请求仍消耗 IP 匿名限流额度，但任务 API 会拒绝访问，不能以 IP 代替会话授权。清 Cookie、更换 Session 或伪造标识不会重置 IP、账号或全局计数。
+转换在浏览器内完成，不上传手动导入的认证内容。它只映射已有字段，不刷新 Token，也不验证当前认证状态；未映射字段不能保证往返保留。[支持类型与映射规则 →](docs/REFERENCE.md#转换功能与字段映射)
 
-多条规则同时适用时，任意一条超限都会返回 HTTP `429`，并通过 `Retry-After` 响应头和 JSON `retry_after` 提供等待秒数。反复请求不会延长原有窗口。页面显示倒计时、保留尚未提交成功的输入，并暂停相关请求；不会自动重新提交密码或验证码。状态查询被限流时，仍可使用独立额度取消任务。
+### IP 纯净度检测
 
-账号额度在整批成功进入队列时扣除，包含后来失败、未运行或取消的账号；重复取消再提交无法退还额度。任务冲突或启动异常不扣账号额度，批次中任一账号超限时整批不启动。请求正文、字段长度和限流计数器数量也有上限。
+查看当前浏览器出口，或输入公网 IPv4 / IPv6 查询来源证据。数据来自 [IPOK](https://ipok.io/)，缺失信息显示为未知；风险分越低代表已返回的不利证据越弱，不表示登录成功率。
 
-这些限制在单个进程内生效，重启后重置，不依赖数据库。它们不替代公网身份验证或入口防护。策略定义、调整示例、请求大小及服务器部署边界见 [安全策略说明](SECURITY.md)。
+Token 页的统一代理只影响 Python 登录请求，**浏览器检测出口可能与登录出口不同**。[数据来源、缓存与额度 →](docs/REFERENCE.md#ip-纯净度检测)
 
-## 查看结果与下载
+### 模型能力评测与并发分析
 
-| 操作 | 可用时机 | 内容 |
-| --- | --- | --- |
-| 查看 RT / 复制 RT | 单个账号成功后 | 该账号完整的 Refresh Token，关闭后隐藏并清空显示内容 |
-| 原始 JSON | 单个账号成功后 | AT、RT、ID Token、有效期和账号元数据 |
-| CPA JSON | 单个账号成功后 | 可供 CPA 使用的 `codex` 认证文件，包含完整 Token、邮箱及可用的账号 / 套餐 / 时间字段 |
-| Sub2API JSON | 批次完成或取消后，且至少有一个成功账号 | 将成功账号合并为一个 `sub2api-data` 文件 |
-| CPA ZIP | 同上 | 每个成功账号一个 CPA JSON，按输入顺序打包，不包含失败账号及原始结果 manifest |
-| 原始结果 ZIP | 同上 | 每个成功账号的 JSON，以及包含所有账号行号、邮箱、状态的 `manifest.json` |
-| RT 文本 | 同上 | 仅成功账号的 RT，每行一个 |
+- **能力评测**：围绕“鹈鹕骑自行车”SVG 题目保留原始输出、渲染证据、人工或 AI 评分与历史报告，用于观察指定视觉任务的表现。它不能代表总体智力或证明上游模型身份。[完整说明 →](docs/PELICAN.md)
+- **并发分析**：通过 Responses / Chat Completions 实际请求，比较模型、输入模式和并发档位。首字、吞吐和缓存统计保留各自口径，报告文字由统计结果生成，不额外调用模型。[指标说明 →](docs/benchmark.md)
 
-列表及批量导出始终按输入顺序排列，不受账号完成先后影响。失败和未完成账号不会混入成功 Token 导出。
+两类测试都需要可用的模型接口；启动前可查看请求计划，持续评测需手动停止。历史数据与密钥的处理方式见下表。
 
-网页不会创建输出目录、Token 文件、批次状态文件或服务端 ZIP，也不会恢复旧版本留在输出目录中的任务。每个成功结果先交给当前浏览器缓存，缓存成功后再向服务确认清除临时结果；下载由浏览器按需生成。服务端未交接的已结束任务最多保留 10 分钟，活动任务无会话访问 10 分钟后取消并清理。
+<a id="数据保存与运行限制"></a>
+## 使用声明与隐私
 
-浏览器结果缓存有效期为 30 分钟；同一会话内可刷新或在新标签页读取，不能把它当作永久备份。页面运行时或下次读取时清除过期缓存；关闭所有页面后浏览器存储不会凭空定时擦除，敏感结果应主动清理。清除站点数据、会话变化或存储策略可能使结果不可恢复，降级为页面内存时刷新会丢失。页面提供清除当前浏览器结果的操作，不影响其他使用者。手动导入转换页的文件仍只在页面内存中处理。
+各工具的数据保存方式不同。**网页 Token 结果不写入服务器文件；能力评测与并发分析会保存本机历史。**
 
-<details>
-<summary>原始 Token JSON 示例</summary>
+| 数据 | 保存与清理方式 |
+| --- | --- |
+| 网页登录凭据 | 由服务端在内存中临时处理；密码和 2FA 密钥不写入浏览器持久化存储或 Token 结果文件 |
+| 网页 Token 结果 | 按签名会话分区缓存到浏览器 `localStorage`，有效期 30 分钟，同会话标签页可共享；下载由浏览器生成 |
+| 服务端 Token 临时结果 | 浏览器确认接收后清除；未交接的已结束结果最多保留 10 分钟，活动工作空间闲置 10 分钟后取消清理 |
+| 手动导入的转换文件 | 只在当前页面内存中处理，不上传、不写入浏览器存储；刷新后需重新导入 |
+| IP 检测与声明记忆 | IP 资料和冷却时间使用会话缓存；公告确认时间独立保存，7 天内免提示 |
+| 鹈鹕能力评测 | 原始输出、评分与图片保存在本机 SQLite；目录可通过 `GPT_EVAL_DATA_DIR` 配置 |
+| 并发分析 | 摘要与请求记录保存在本机 JSON 历史目录；目录可通过 `GPT_BENCHMARK_DATA_DIR` 配置 |
+| 模型接口 API key | 仅在浏览器输入框和服务端内存中处理，不写入历史、浏览器持久化存储或导出文件 |
+| CLI / Python 显式保存 | 按指定路径写入明文 JSON，采用原子写入及 POSIX `0600` 权限 |
 
-```json
-{
-  "email": "you@example.com",
-  "access_token": "<AT>",
-  "refresh_token": "<RT>",
-  "id_token": "<ID Token>",
-  "expires_in": 3600,
-  "obtained_at": "2026-10-22T00:00:00+00:00",
-  "expires_at": "2026-10-22T01:00:00+00:00",
-  "chatgpt_account_id": "...",
-  "chatgpt_user_id": "...",
-  "plan_type": "...",
-  "sub": "...",
-  "token_type": "Bearer"
-}
-```
+浏览器缓存包含完整凭据，过期清理发生在页面运行或下次读取时；关闭所有标签页不会立即擦除存储。请下载需要的结果并主动清理，避免多人共用同一浏览器配置。存储不可用时页面会说明降级限制；服务重启不能恢复活动登录或尚未交接的 Token 结果。
 
-`expires_at` 表示 AT 的到期时间，不代表 RT 的寿命。账号标识等元数据来自 Token claims，仅作为信息展示，不用于身份验证。
+<a id="本站请求防护"></a>
 
-</details>
+任务操作均校验签名浏览器会话归属，并检查 Host、Origin、CSRF 和请求频率。HTTP 429 按 `Retry-After` 等待，页面不会自动重提密码或验证码。服务不包含公网用户登录体系，也不能通过增加独立进程共享当前任务。详见 [安全策略](SECURITY.md)、[数据与运行边界](docs/REFERENCE.md#数据保存与运行限制)及 [迁移说明](docs/MAINTAINERS.md#privacy-migration)。
 
-<details>
-<summary>Sub2API 批量 JSON 示例</summary>
+<a id="token-types"></a>
+## Token 术语
 
-```json
-{
-  "type": "sub2api-data",
-  "version": 1,
-  "exported_at": "2026-10-22T00:00:00.000Z",
-  "proxies": [],
-  "accounts": [
-    {
-      "name": "oauth---you@example.com",
-      "platform": "openai",
-      "type": "oauth",
-      "credentials": {
-        "access_token": "<AT>",
-        "chatgpt_account_id": "<账号 ID>",
-        "email": "you@example.com",
-        "id_token": "<ID Token>",
-        "refresh_token": "<RT>"
-      },
-      "extra": {
-        "account_id": "<账号 ID>",
-        "chatgpt_account_id": "<账号 ID>",
-        "chatgpt_user_id": "<用户 ID>",
-        "client_id": "app_EMoamEEZ73f0CkXaXp7hrann",
-        "email": "you@example.com",
-        "openai_long_context_billing_enabled": false,
-        "openai_oauth_responses_websockets_v2_enabled": false,
-        "openai_oauth_responses_websockets_v2_mode": "off",
-        "privacy_mode": "training_set_failed"
-      },
-      "concurrency": 10,
-      "priority": 1,
-      "rate_multiplier": 1,
-      "auto_pause_on_expired": true
-    }
-  ]
-}
-```
+| 名称 | 本项目中的含义 |
+| --- | --- |
+| **RT** · Refresh Token | 认证服务签发的刷新凭据；本项目提取并导出，不负责自动续期 |
+| **AT** · Access Token | 访问令牌；导出中的 `expires_at` 描述 AT 到期时间，不代表 RT 寿命 |
+| **ID Token** | 包含身份 claims 的令牌；读取元数据不等于验证签名或当前有效性 |
+| **API Key** | 与账号 Token 不同；本项目不会为 ChatGPT 账号创建 API Key |
 
-`accounts` 只包含成功账号；`exported_at` 为生成文件时的 UTC 时间，`proxies` 固定为空数组，不导出登录代理及其凭据。
-
-导出字段中的 `concurrency: 10` 是 Sub2API 账号配置，与网页选择的同时处理账号数无关。`privacy_mode` 等字段沿用导出格式的配置值，不表示本工具修改或核验了账号的服务端隐私设置。
-
-</details>
+术语定义及来源见 [技术参考](docs/REFERENCE.md#token-types)。
 
 ## 命令行与 Python 接口
 
-CLI 和公开 Python API 用于**单个账号**；批量导入及并发控制通过网页使用。仅需 CLI/API 时，安装命令可使用 `.venv/bin/python -m pip install .`，无需 Flask。
-
-### 交互式命令行
+CLI 和公开 Python API 每次处理单个账号。无需网页时，安装可使用 `.venv/bin/python -m pip install .`。
 
 ```bash
 .venv/bin/python -m rt_extractor --email you@example.com --output tokens.json
 ```
 
-程序隐藏输入密码和 2FA 密钥。密钥留空时，可在需要验证时输入 Authenticator 当前的 6 位动态码。已有动态码可能在登录过程中到期，优先使用密钥或按提示输入新码。
+命令行会隐藏密码与 2FA 输入；输出默认不覆盖已有文件。Python 提供 `extract_tokens(...)` 返回内存结果，或 `extract_and_save(...)` 显式保存。无交互 JSON 输入、环境变量、异步回调与错误类型见 [CLI / Python 完整说明](docs/REFERENCE.md#命令行与-python-接口)。
 
-输出文件默认不覆盖；可使用 `--overwrite` 明确覆盖。其他参数示例：
+## 文档导航
 
-```bash
-.venv/bin/python -m rt_extractor --email you@example.com --output tokens.json --proxy http://127.0.0.1:7890 --timeout 180
-```
+| 文档 | 内容 |
+| --- | --- |
+| [Token 提取指南](docs/TOKEN-GUIDE.md) | 从安装、导入与验证到下载结果 |
+| [技术参考](docs/REFERENCE.md) | 输入规范、并发与限流、转换字段、JSON 示例、CLI / Python API |
+| [GPT 能力评测](docs/PELICAN.md) | 题目、评分规则、历史保存与报告 |
+| [并发分析](docs/benchmark.md) | 测试配置、指标口径、接口与导出 |
+| [常见问题](docs/FAQ.md) | 认证、Token、转换、代理与故障排查 |
+| [批次进度停住排查](docs/BATCH-TROUBLESHOOTING.md) | 旧缓存假卡住、任务过期、结果保留与恢复步骤 |
+| [安全策略](SECURITY.md) | 会话隔离、请求额度、资源边界与远程自用 |
+| [维护与更新](docs/MAINTAINERS.md) | 安装升级、进程重启、旧版迁移与公开文档配置 |
+| [产品说明](PRODUCT.md) / [界面规范](DESIGN.md) | 产品范围与设计约定 |
+| [SEO / GEO 方案](docs/SEO-GEO-PLAN.md) | 网站与仓库的发现信息及公开文档规划 |
 
-### 无交互调用
+应用也提供 `/docs`、`/docs/token-extraction`、`/docs/token-types`、`/docs/cpa-sub2api`、`/docs/faq` 公开说明页，具体可用内容取决于所部署版本。
 
-自行创建本地 `account.json`，以下内容均为占位值；不需要代理时删除 `proxy` 字段：
+## 开发与测试
 
-```json
-{
-  "email": "you@example.com",
-  "password": "YOUR_ACCOUNT_PASSWORD",
-  "totp_secret": "YOUR_BASE32_SECRET",
-  "proxy": "http://127.0.0.1:7890"
-}
-```
-
-```bash
-.venv/bin/python -m rt_extractor --input account.json --output tokens.json --non-interactive
-```
-
-也可使用环境变量 `RT_EMAIL`、`RT_PASSWORD`、`RT_TOTP_SECRET`、`RT_TOTP_CODE`、`RT_PROXY`；`totp_secret` 与 `totp_code` 二选一。指定 `--input` 时，不会混用环境变量中的账号凭证。密码和 2FA 不提供命令行参数，避免出现在进程参数列表中。
-
-如需额外邮箱验证码，交互模式会提示输入，无交互模式返回额外验证错误。
-
-### Python 调用
-
-```python
-import asyncio
-import os
-from rt_extractor import extract_and_save
-
-async def main():
-    result = await extract_and_save(
-        os.environ["RT_EMAIL"],
-        os.environ["RT_PASSWORD"],
-        "tokens.json",
-        totp_secret=os.environ["RT_TOTP_SECRET"],
-        timeout=180,
-    )
-    # result.access_token / result.refresh_token / result.id_token
-    print("已保存完整 Token")
-
-asyncio.run(main())
-```
-
-- `extract_tokens(...)`：异步登录并返回 `TokenBundle`，不写文件。
-- `extract_and_save(...)`：异步登录并保存三类 Token。
-- `save_tokens(result, path)`：单独保存已有结果。
-
-支持异步 `totp_fetcher() -> str`、`otp_fetcher(email) -> str` 回调，以及同步 `on_step(stage, message)` 脱敏进度回调。调用方已有事件循环时直接 `await`。
-
-输入错误为 `ValueError`；网络失败、超时或结果不完整为 `ExtractionError`；协议拒绝为 `rt_extractor._protocol.login.ProtocolError`。额外验证为其子类 `AdditionalVerificationRequired`，可通过 `.kind` 区分。
-
-## 数据保存与运行限制
-
-- **凭据保存**：程序不会把输入的密码、2FA 密钥或代理凭证写入 Token 结果；网页提交成功后清空输入，也不使用浏览器本地存储保存这些内容。自行创建的 `account.json` 本身包含凭据，需自行保管。
-- **网页结果**：仅写入当前浏览器会话缓存，服务器在登录与交接期间临时使用内存，不保存结果文件。普通状态查询不含 Token 正文，读取结果必须校验当前签名会话的归属。
-- **CLI 文件**：CLI 的 `--output`、Python 的 `extract_and_save` / `save_tokens` 仍按显式要求保存明文 JSON，使用原子写入及 POSIX `0600` 权限。这与网页无落盘模式分别处理。
-- **刷新与重启**：当前标签页可恢复未过期的浏览器缓存；服务重启不能恢复未交接结果或活动登录。旧版输出目录不会再被网页读取，已有历史文件由部署者检查、清理，升级不会自动删除文件。
-- **多人隔离**：签名浏览器会话对应独立任务空间，读结果、验证码、取消与清理均检查归属；其他会话访问已知任务 ID 也返回 404。缺失、失效或伪造 Cookie 会被拒绝。同一浏览器配置共享会话，不能代表不同人员。
-- **本地运行**：默认仅允许本机访问，不包含公网用户登录或管理员体系。远程部署仍需可信 HTTPS 入口、访问控制与代理配置；不要删除现有访问校验。迁移步骤见[维护说明](docs/MAINTAINERS.md#privacy-migration)。
-- **进程模型**：任务状态保存在单个应用进程的内存中，不能直接增加多个应用副本共享当前任务。
-- **功能边界**：处理已有账号，不包含自动注册、手机号验证、自动邮箱取码或 RT 自动续期。2FA 不能替代服务端要求的其他验证。
-- **兼容性**：登录使用私有接口，可能随服务端更新失效；并发数是本地上限，不代表服务端配额或实际加速倍数。Node.js 仅用于可选的认证 VM 回退，并非基础依赖。
-
-登录协议整理自原项目的 `botcore/protocol_register`，保留 PKCE、HTTP、TOTP 和认证支持代码，独立于原管理后台、数据库、注册、支付及接码模块。客户端开启 TLS 验证，核对 OAuth 回调地址和 state，并在请求前截获回调，不依赖本机端口 1455 正在监听。认证背景可参考 [OpenAI 认证文档](https://learn.chatgpt.com/docs/auth)。
-
-## 测试与项目结构
-
-安装网页依赖后，在仓库根目录执行：
-
-```bash
-.venv/bin/python -m unittest discover -s tests -v
-```
-
-前端模块测试使用 Node.js（推荐 22+）：
-
-```bash
-node --test tests/*.mjs
-```
-
-测试使用合成账号和模拟网络，覆盖登录协议、保存、网页交互接口、并发调度、验证码、取消、限流、CPA / Sub2API 导出，以及前端双向字段映射、粘贴解析、时间戳与 ZIP 打包。声明弹窗测试覆盖 7 天到期边界、跨页记忆、跨标签确认、损坏或未来时间戳、存储异常回退、关闭与焦点恢复及 QQ 群号复制。测试不会登录真实账号。Node.js 仅为运行前端模块测试所需，使用浏览器转换页面不需要安装 Node.js。
-
-隐私回归覆盖同 IP 多会话互不可见、猜测任务 ID、伪造或过期 Cookie、会话 CSRF、无文件写入及旧文件不恢复、结果交接后清除、固定 TTL、内存上限，以及启动 / 清理 / ACK 的并发竞态。浏览器缓存测试还覆盖多标签接收串行化、旧快照不覆盖成功结果、清除后在途请求不能回填和本地下载。
+后端使用 Python / Flask / httpx，前端为 Jinja2 模板与原生 JavaScript / CSS。开发时可用 `.venv/bin/python -m pip install -e '.[web]'` 安装，静态资源无需打包。
 
 ```text
 chatGPT2RT-AT/
-├── README.md
-├── README.en.md
-├── docs/                 # 提取指南、FAQ、维护说明与 SEO / GEO 方案
-├── pyproject.toml
-├── requirements.txt
-├── rt_extractor/          # 独立模块、网页和登录协议
-└── tests/                 # 合成账号和模拟网络测试
+├── rt_extractor/          # 登录协议、任务调度、评测与并发分析
+│   ├── templates/        # Jinja2 页面
+│   ├── static/           # JavaScript / CSS 与资源
+│   └── _protocol/        # HTTP、PKCE、TOTP 与认证协议
+├── tests/                # 单元、集成与浏览器测试
+├── docs/                 # 使用指南、技术参考与维护说明
+├── pyproject.toml        # Python 依赖与入口
+└── THIRD_PARTY_NOTICES.md # 第三方来源与许可
 ```
+
+安装网页依赖后，在仓库根目录运行；前端测试推荐 Node.js 22+：
+
+```bash
+.venv/bin/python -m unittest discover -s tests -v
+node --test tests/*.mjs
+git diff --check
+```
+
+测试使用合成账号和模拟网络，不登录真实账号。评测与并发模块的可选浏览器验收命令见各自文档。欢迎提交复现步骤、文档修正和有针对性的测试；Issue 中请注明版本与脱敏错误，不附真实账号凭据。
+
+## 更新已有安装
+
+先结束当前任务，下载需要的 Token 结果并保留评测历史，再在实际部署目录执行：
+
+```bash
+git status --short
+git pull --ff-only
+.venv/bin/python -m pip install '.[web]'
+```
+
+有本地修改时先检查和保留。更新后重启实际运行的 Python / Gunicorn 服务或重建并重启对应容器，再刷新页面；只拉取代码或重启 Nginx 不会让 Python 重新加载模板。详细步骤见 [维护文档](docs/MAINTAINERS.md)。
 
 ## 常见问题
 
-### 如何提取 ChatGPT RT 和 AT？
+<details>
+<summary>批次还有几百个账号，为什么进度不再变化？</summary>
 
-在自己控制的设备上按[快速开始](#快速开始)启动工具，通过网页导入已有授权账号并完成要求的验证。只有同时获得 AT、RT 和 ID Token 才会标记成功；随后可查看 RT 或下载认证 JSON。单账号也可使用 CLI / Python。分步说明见 [Token 提取指南](docs/TOKEN-GUIDE.md)。
+若页面仍显示“提取中”却没有运行账号详情，可能在显示旧缓存。旧版遇到任务接口 404 后会停止刷新但保留运行状态；本次已修复，任务不存在时明确结束旧进度，保留已接收结果。页面在后台且会话闲置超过 10 分钟、服务重启或多进程部署都可能让任务无法查询，具体需结合请求状态码判断。见 [排查记录与恢复步骤](docs/BATCH-TROUBLESHOOTING.md)。
 
-### 已有 Token 可以直接转换 CPA 或 Sub2API 吗？
+</details>
 
-可以。在格式转换页导入已有认证 JSON，不需要重新登录。转换只整理已有字段，不会兑换、续期或检查 Token 是否仍有效，详见[转换说明](#cpa--sub2api-格式转换)。
+<details>
+<summary>等待邮箱验证码会卡住整批吗？</summary>
 
-### 为什么输入账号后仍显示 0 条，开始按钮不可用？
+等待验证码会占用处理名额。可输入验证码、点击「跳过此账号」，或开启「跳过邮箱验证」让当前和后续邮箱验证账号自动结束提取。跳过账号没有 Token，其他名额和队列继续处理。
 
-先检查浏览器 Console。若看到 `Cannot use import statement outside a module`，可能是旧 HTML 模板仍在加载含 `import` 的新 JavaScript。更新后需让实际运行的 Python / Gunicorn 服务或容器加载同一版本，再刷新页面；只执行 `git pull` 或只重启 Nginx 不一定生效。详见[维护与更新](docs/MAINTAINERS.md#module-loading)。
+</details>
 
-### 会自动注册、跳过 2FA 或一直刷新 RT 吗？
+<details>
+<summary>已有 Token 可以直接转换吗？</summary>
 
-不会。工具处理已有账号，2FA 密钥不能替代认证服务要求的额外邮箱或其他验证；项目不包含自动注册、手机号验证、自动邮箱取码或 RT 自动续期。
+可以。在格式转换页导入已有 JSON，无需重新登录。转换不会刷新 Token，也不保证凭据仍有效。
 
-更多问题包括“Token 保存在哪”“AT 过期是否代表 RT 失效”“IP 检测是否等于登录代理”，见 [FAQ](docs/FAQ.md)。
+</details>
+
+<details>
+<summary>更新后输入仍显示 0 条，按钮不能点击？</summary>
+
+检查浏览器 Console 是否出现 `Cannot use import statement outside a module`。通常需要确认运行进程、已安装包、HTML 模板与静态文件属于同一版本，重启实际应用进程后再刷新。见 [排查步骤](docs/MAINTAINERS.md#module-loading)。
+
+</details>
+
+更多问题见 [FAQ](docs/FAQ.md)。
 
 ## 来源与许可
 
-主项目目前没有声明完整的项目许可证，源码公开不等于已授予任意复制、修改或再分发权限；使用或分发前应确认作者授权。不要将局部第三方 MIT 许可视为整个项目的许可。
+主项目目前**尚未声明统一许可证**。源码公开不等于已授予任意复制、修改或再分发权限，使用或分发前应确认授权。
 
-CPA 转换模块适配自 [CPA2sub2API](https://github.com/gtxx3600/CPA2sub2API)，原始 MIT 许可和修改说明保留在 [THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md)。登录协议整理来源见[数据保存与运行限制](#数据保存与运行限制)。问题报告请附版本、脱敏错误和复现步骤，不要提交账号、密码、2FA 密钥或 Token。
-
-公开说明页由本项目提供：`/docs`、`/docs/token-extraction`、`/docs/token-types`、`/docs/cpa-sub2api`、`/docs/faq`。它们需要部署当前版本后才可访问；本 README 不表示已核验线上部署状态。网站与仓库的关键词、内容及抓取配置方案见 [SEO / GEO 优化方案](docs/SEO-GEO-PLAN.md)。
+CPA 转换模块适配自 [CPA2sub2API](https://github.com/gtxx3600/CPA2sub2API)，原 MIT 许可及修改说明保留在 [THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md)，该局部许可不代表整个项目的许可。登录协议整理自原项目 `botcore/protocol_register`，来源和实现边界见 [技术参考](docs/REFERENCE.md#数据保存与运行限制)。
 
 ## 联系与交流
 
+- 问题与建议：[GitHub Issues](https://github.com/d100000/chatGPT2RT-AT/issues)
 - 作者邮箱：[bbo_dong@qq.com](mailto:bbo_dong@qq.com)
 - QQ 交流群：**916444032**
-- 开源仓库：[d100000/chatGPT2RT-AT](https://github.com/d100000/chatGPT2RT-AT)
 
-欢迎交流使用经验、反馈问题和参与改进。相关第三方模块的来源与许可见 [THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md)。
-
-## 并发分析 Tab
-
-打开 `/benchmark`，可比较多个模型在不同并发和输入模式下的首字延迟、吞吐、成功率及缓存使用情况。支持 Responses / Chat Completions、共享连接、后台运行与停止、历史恢复，以及 HTML / CSV / JSON 导出。已有服务请重启以载入新路由。
-
-完整启动、指标口径、密钥与历史说明、API 和本地 mock 验证方式见 [并发分析说明](docs/benchmark.md)。
+欢迎分享使用经验、提交问题复现和参与文档改进。
