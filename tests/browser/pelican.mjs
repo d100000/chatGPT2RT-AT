@@ -29,8 +29,27 @@ async function saveDownload(selector, name) { const pending = page.waitForEvent(
 try {
   await page.goto(config.url + '/pelican');
   if (await page.locator('#site-notice-dialog').isVisible()) await page.locator('#site-notice-dialog').evaluate(dialog => dialog.close());
-  await page.locator('#eval-question option').waitFor({ state: 'attached' });
+  await page.locator('#eval-question option').first().waitFor({ state: 'attached' });
   assert.equal(await page.locator('#eval-models').inputValue(), 'gpt-6.1-sol');
+  assert.equal(await page.locator('#eval-question option').count(), 101);
+  assert.equal(await page.locator('#eval-random-questions').isChecked(), true);
+  assert.equal(await page.locator('#eval-fixed-questions').isVisible(), false);
+  assert.equal(await page.locator('#eval-question').isDisabled(), true);
+  assert.match(await page.locator('#eval-estimate').innerText(), /随机 1 题 × 1 个模型，1 次请求/);
+  // Fixed selections survive toggling, but never multiply random request counts.
+  await page.locator('#eval-random-questions').uncheck();
+  const fixedIds = await page.locator('#eval-question option').evaluateAll(options => options.slice(0, 2).map(option => option.value));
+  await page.locator('#eval-question').selectOption(fixedIds);
+  assert.equal(await page.locator('#eval-once').isDisabled(), true);
+  await page.locator('#eval-random-questions').check();
+  assert.equal(await page.locator('#eval-once').isEnabled(), true);
+  await page.locator('#eval-scope').selectOption('batch');
+  await page.locator('#eval-models').fill('mock-good\nmock-animated');
+  assert.match(await page.locator('#eval-estimate').innerText(), /随机 3 题 × 2 个模型，6 次请求/);
+  await page.locator('#eval-random-questions').uncheck();
+  assert.deepEqual(await page.locator('#eval-question').evaluate(select => [...select.selectedOptions].map(option => option.value)), fixedIds);
+  await page.locator('#eval-question').selectOption('pelican-bicycle');
+  await page.locator('#eval-scope').selectOption('simple');
   await fill('mock-animated');
   await page.locator('#eval-load-models').click();
   await page.locator('#eval-model-catalog').waitFor({ state: 'visible' });
@@ -100,10 +119,43 @@ try {
   const judge = calls.find(call => call.body.model === 'mock-judge');
   assert.equal(judge.body.input[0].content[1].image_url, reviewImage);
   await page.locator('[data-close="review-dialog"]').click();
+  // Random questions retain their exact prompt and require watching the animation.
+  await page.locator('#eval-random-questions').check();
+  await fill('mock-animated');
+  await page.locator('#eval-once').click();
+  await untilSample(2);
+  await page.waitForFunction(() => ![...document.querySelectorAll('#eval-samples button')].find(b => b.textContent === '看图评分').disabled);
+  const animationTitle = await page.locator('#eval-samples .eval-sample-question').first().innerText();
+  assert.notEqual(animationTitle, '鹈鹕骑自行车');
+  await page.getByRole('button', { name: '看图评分', exact: true }).first().click();
+  assert.ok((await page.locator('#review-image img').getAttribute('src')).startsWith('data:image/svg+xml;base64,'));
+  assert.match(await page.locator('#review-image').innerText(), /静态截图不能评价运动/);
+  assert.equal(await page.locator('#ai-review-settings').isVisible(), false);
+  assert.equal(await page.locator('#review-animation-observed').isChecked(), false);
+  assert.equal(await page.locator('#review-animation-observed').evaluate(input => input.required && !input.checkValidity()), true);
+  await page.locator('#review-reviewer').fill('animation-reviewer');
+  for (const d of 'ABCD') { await page.locator(`#score-${d}`).selectOption('3'); await page.locator(`#reason-${d}`).fill('本地动画测试，观察完整周期'); await page.locator(`#location-${d}`).fill('运动主体'); }
+  await page.locator('#review-animation-observed').check();
+  await page.getByRole('button', { name: '保存人工评分', exact: true }).click();
+  await page.locator('#review-dialog').waitFor({ state: 'hidden' });
+  await page.locator('#filter-question').selectOption({ label: animationTitle });
+  await page.locator('#eval-filter').click();
+  await page.locator('[data-eval-view="blind"]').click();
+  await page.locator('#blind-reviewer').fill('animation-blind-reviewer');
+  await page.locator('#blind-start').click();
+  await page.getByRole('button', { name: '独立评分', exact: true }).click();
+  assert.ok((await page.locator('#review-image img').getAttribute('src')).startsWith('data:image/svg+xml;base64,'));
+  assert.equal(await page.locator('#review-animation-observed').isChecked(), false);
+  assert.equal((await page.locator('#review-dialog').innerText()).includes('mock-animated'), false);
+  await page.locator('[data-close="review-dialog"]').click();
+  await page.locator('[data-eval-view="run"]').click();
+  await page.locator('#filter-question').selectOption('');
+  await page.locator('#eval-filter').click();
   // A loop persists across navigation and refresh, and cancellation keeps its partial.
   await fill('mock-slow');
   await page.locator('#eval-continuous').click();
   await page.waitForFunction(() => document.querySelector('#eval-fields').disabled);
+  assert.equal(await page.locator('#eval-random-questions').isDisabled(), true);
   await page.goto(config.url + '/converter');
   await page.locator('#pelican-task-badge').waitFor({ state: 'visible' });
   await page.goto(config.url + '/pelican');
@@ -112,7 +164,8 @@ try {
   await page.waitForFunction(() => !document.querySelector('#eval-fields').disabled);
   const before = (await (await page.request.get(config.url + '/__test__/requests')).json()).requests.length;
   await page.reload();
-  await page.locator('#eval-question option').waitFor({ state: 'attached' });
+  await page.locator('#eval-question option').first().waitFor({ state: 'attached' });
+  assert.equal(await page.locator('#eval-random-questions').isChecked(), true);
   const after = (await (await page.request.get(config.url + '/__test__/requests')).json()).requests.length;
   assert.equal(after, before);
   // Mobile wrapping and running controls are real browser checks.
@@ -122,7 +175,7 @@ try {
   await page.screenshot({ path: join(artifacts, 'mobile.png'), fullPage: true });
   assert.equal(await page.locator('a[href="/pelican"][aria-current="page"]').count(), 1);
   assert.deepEqual(errors, []);
-  console.log(JSON.stringify({ passed: true, artifacts, assertions: 'CSS/SMIL animated SVG render + unchanged download; identical PNG for human/blind/AI reviews; two independent reviews; JSON/CSV/HTML/SVG downloads; cross-page loop; stop; reload; desktop/mobile; no runtime errors' }));
+  console.log(JSON.stringify({ passed: true, artifacts, assertions: 'default random switch and plan counts; fixed selection restored; animated SVG review with cycle confirmation and no AI; animated blind review; fixed baseline PNG evidence and AI; JSON/CSV/HTML/SVG downloads; cross-page loop; stop; reload; desktop/mobile; no runtime errors' }));
 } catch (error) {
   await page.screenshot({ path: join(artifacts, 'failure.png'), fullPage: true });
   console.error(JSON.stringify({ artifacts, uiError: await page.locator('#eval-error').textContent(), reviewStatus: await page.locator('#review-status').textContent(), errors, serverErrors: serverErrors.slice(-6000) }));

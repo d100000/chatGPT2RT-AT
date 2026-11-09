@@ -101,13 +101,18 @@ def html_export(data):
     sections = []
     for r in data["samples"]:
         image = ""
-        if r.get("render_evidence"):
+        animation = bool(r["question"].get("animation"))
+        if animation and r.get("svg") and r["technical"]["safe"]:
+            image = "data:image/svg+xml;base64," + base64.b64encode(r["svg"].encode()).decode()
+        elif r.get("render_evidence"):
             image = r["render_evidence"]["data_url"]
         elif r.get("svg") and r["technical"]["safe"]:
             image = "data:image/svg+xml;base64," + base64.b64encode(r["svg"].encode()).decode()
         preview = f'<img alt="样本 {esc(r["id"])}" src="{image}">' if image else '<p>无可安全预览的图片</p>'
-        sections.append(f'<article><h3>{esc(r["requested_model"])} · 第 {r["round"]} 轮 · {esc(r["status"])}</h3>{preview}<p>样本 {esc(r["id"])} / 批次 {esc(r["batch_id"])}</p><p>视觉总分 {esc(review_summary(r)["total"])} / 20；评审 {len(r.get("reviews", []))} 名</p><pre>{pretty({k: v for k, v in r.items() if k not in {"raw_wire", "svg", "render_evidence"}})}</pre></article>')
+        if animation:
+            preview += '<p>动画题：人工评分依据原始 SVG 的完整动画周期；保存的 PNG 仅用于记录浏览器渲染。</p>'
+        sections.append(f'<article><h3>{esc(r["requested_model"])} · 第 {r["round"]} 轮 · {esc(r["status"])}</h3><h4>{esc(r["question"].get("title", r["question"]["id"]))}</h4>{preview}<p>样本 {esc(r["id"])} / 批次 {esc(r["batch_id"])}</p><p>视觉总分 {esc(review_summary(r)["total"])} / 20；评审 {len(r.get("reviews", []))} 名</p><pre>{pretty({k: v for k, v in r.items() if k not in {"raw_wire", "svg", "render_evidence"}})}</pre></article>')
     style = "body{font:15px/1.7 system-ui,sans-serif;color:#17233d;background:#f5f7fb;margin:32px auto;padding:0 20px;max-width:1200px}h1{font-size:28px}article,section{padding:20px;background:white;border:1px solid #dce3ee;border-radius:8px;margin:20px 0}img{width:100%;max-height:420px;object-fit:contain}pre{white-space:pre-wrap;overflow-wrap:anywhere;font:12px/1.7 monospace}.samples{display:grid;grid-template-columns:repeat(auto-fit,minmax(min(100%,420px),1fr));gap:20px}"
     style_hash = base64.b64encode(hashlib.sha256(style.encode()).digest()).decode()
     policy = f"default-src 'none'; img-src data:; style-src 'sha256-{style_hash}'; base-uri 'none'; form-action 'none'"
-    return f'<!doctype html><html lang="zh-CN"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><meta http-equiv="Content-Security-Policy" content="{html.escape(policy, quote=True)}"><title>GPT 能力评测 · 鹈鹕报告</title><style>{style}</style></head><body><h1>GPT 能力评测 · 鹈鹕报告</h1><p>{esc(DISCLAIMER)}</p><p>视觉均分只基于已评分样本。技术失败、取消、性能与视觉分分别统计。浏览器渲染率以已尝试渲染的样本为分母，同时展示渲染覆盖率。小样本不作稳定排名。</p><section><h2>分组统计（参数相同才合并）</h2><pre>{pretty(data["groups"])}</pre></section><details><summary>题面、来源、规则与批次配置快照</summary><pre>{pretty(data["batches"])}</pre></details><div class="samples">{"".join(sections)}</div></body></html>'
+    return f'<!doctype html><html lang="zh-CN"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><meta http-equiv="Content-Security-Policy" content="{html.escape(policy, quote=True)}"><title>GPT 能力评测 · SVG 报告</title><style>{style}</style></head><body><h1>GPT 能力评测 · SVG 报告</h1><p>{esc(DISCLAIMER)}</p><p>视觉均分只基于已评分样本。技术失败、取消、性能与视觉分分别统计。浏览器渲染率以已尝试渲染的样本为分母，同时展示渲染覆盖率。小样本不作稳定排名。</p><section><h2>分组统计（参数相同才合并）</h2><pre>{pretty(data["groups"])}</pre></section><details><summary>题面、来源、规则与批次配置快照</summary><pre>{pretty(data["batches"])}</pre></details><div class="samples">{"".join(sections)}</div></body></html>'

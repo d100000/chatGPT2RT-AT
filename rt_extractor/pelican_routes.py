@@ -73,6 +73,13 @@ def register_pelican(app, *, directory=None, transport=None):
                 record["render_evidence"] = {k: v for k, v in record["render_evidence"].items() if k != "data_url"}
         return record
 
+    def task_view(record):
+        # Poll progress without resending the frozen 100-question catalog for
+        # every historical batch. Full snapshots remain in history and exports.
+        config = dict(record["config"])
+        config["question_count"] = len(config.pop("questions", []))
+        return dict(record, config=config)
+
     @app.get("/pelican")
     def pelican_page():
         return render_template("pelican.html", csrf_token=g.csrf_token,
@@ -98,15 +105,15 @@ def register_pelican(app, *, directory=None, transport=None):
 
     @app.get("/api/pelican/tasks")
     def pelican_tasks():
-        return api(lambda: jsonify(tasks=service.tasks(g.pelican_owner)))
+        return api(lambda: jsonify(tasks=[task_view(t) for t in service.tasks(g.pelican_owner)]))
 
     @app.post("/api/pelican/tasks")
     def pelican_start():
-        return api(lambda: (jsonify(batch=service.start(g.pelican_owner, data())), 201))
+        return api(lambda: (jsonify(batch=task_view(service.start(g.pelican_owner, data()))), 201))
 
     @app.post("/api/pelican/tasks/<identifier>/stop")
     def pelican_stop(identifier):
-        return api(lambda: jsonify(batch=service.stop(g.pelican_owner, identifier)))
+        return api(lambda: jsonify(batch=task_view(service.stop(g.pelican_owner, identifier))))
 
     @app.get("/api/pelican/samples")
     def pelican_samples():

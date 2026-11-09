@@ -1,8 +1,8 @@
-import { activeTask, numberText as num, percentText as pct, timeText, statusText, requestCount, modelIds, svgDataURL, filtersFrom } from './eval-ui.mjs';
+import { activeTask, numberText as num, percentText as pct, timeText, statusText, requestCount, modelIds, svgDataURL, reviewImage, filtersFrom } from './eval-ui.mjs';
 
 const $ = (id) => document.getElementById(id);
 const csrf = document.querySelector('meta[name="rt-csrf"]').content;
-const state = { questions: [], tasks: [], samples: [], page: 1, total: 0, filters: {}, selected: new Map(), pending: false, active: false, view: 'run', signature: '', review: null, blind: null, cooldown: 0 };
+const state = { questions: [], catalogReady: false, tasks: [], samples: [], page: 1, total: 0, filters: {}, selected: new Map(), pending: false, active: false, view: 'run', signature: '', review: null, blind: null, cooldown: 0 };
 const rendering = new Set();
 let pollTimer;
 let refreshVersion = 0;
@@ -28,6 +28,7 @@ function connection(prefix = 'eval') {
 }
 function plan() {
   return { ...connection(), models: modelIds($('eval-models').value), questions: [...$('eval-question').selectedOptions].map(o => o.value),
+    random_questions: $('eval-random-questions').checked,
     scope: $('eval-scope').value, repeats: Number($('eval-repeats').value),
     interval_seconds: Number($('eval-interval').value), max_rounds: Number($('eval-rounds').value) };
 }
@@ -35,25 +36,43 @@ function updatePlan() {
   const config = plan();
   $('eval-repeats').disabled = config.scope !== 'batch';
   $('eval-schedule').hidden = $('eval-mode').value !== 'scheduled';
-  const count = requestCount(config.questions.length, config.models.length, config.scope, config.repeats);
+  $('eval-question').disabled = config.random_questions;
+  $('eval-question').required = !config.random_questions;
+  $('eval-fixed-questions').hidden = config.random_questions;
+  $('eval-repeats-label').textContent = config.random_questions ? '每轮抽题次数' : '每模型每题重复';
+  $('eval-scope').querySelector('option[value="batch"]').textContent = config.random_questions ? '批量：抽题次数 × 模型' : '批量：题目 × 模型 × 重复';
+  const poolSize = state.questions.filter(q => q.animation).length;
+  const questionsReady = state.catalogReady && (config.random_questions ? poolSize > 0 : config.questions.length > 0);
+  $('eval-random-help').textContent = config.random_questions
+    ? !state.catalogReady ? '正在读取动画题库…' : poolSize ? `从 ${poolSize} 道动画题中抽取；同组模型使用同一道题，本任务抽完一遍前不重复。实际题目随样本保存。` : '当前没有启用的动画题，请关闭随机题目后选择固定题目。'
+    : '已关闭随机抽题，按下方所选题目执行；可选择动画题或“鹈鹕骑自行车”原题基线。';
+  const count = requestCount(config.questions.length, config.models.length, config.scope, config.repeats, config.random_questions);
   const rounds = $('eval-mode').value === 'scheduled' ? config.max_rounds : 1;
-  $('eval-estimate').textContent = `一轮 = ${config.scope === 'simple' ? '单题、单模型一次请求' : '完整批量计划'}，${count} 次请求。${rounds ? `计划共 ${rounds * count} 次。` : '定时计划不限轮数。'}持续循环总数不限。`;
-  $('eval-once').disabled = config.questions.length !== 1 || config.models.length !== 1 || state.active || state.pending;
+  const scope = config.random_questions ? `随机 ${config.scope === 'batch' ? config.repeats : 1} 题 × ${config.models.length} 个模型` : '固定题目计划';
+  $('eval-estimate').textContent = `一轮 = ${scope}，${count} 次请求。${rounds ? `计划共 ${rounds * count} 次。` : '定时计划不限轮数。'}持续循环总数不限。`;
+  $('eval-once').disabled = (!config.random_questions && config.questions.length !== 1) || config.models.length !== 1 || state.active || state.pending || !questionsReady;
   $('eval-fields').disabled = state.active || state.pending;
-  $('eval-start').disabled = state.active || state.pending;
-  $('eval-continuous').disabled = state.active || state.pending;
+  $('eval-start').disabled = state.active || state.pending || !questionsReady;
+  $('eval-continuous').disabled = state.active || state.pending || !questionsReady;
   const questions = state.questions.filter(q => config.questions.includes(q.id));
   $('eval-prompt').textContent = questions.map(q => q.prompt).join('\n\n');
-  $('eval-baseline').textContent = questions.map(q => q.baseline).join('\n');
+  $('eval-baseline').textContent = config.random_questions
+    ? '随机模式只从动画题库抽题；每次抽题后，同组的所有模型使用相同题面。单次测试抽一道，批量按抽题次数执行，持续或定时任务接着抽取。100 道全部用完后重新打乱。'
+    : questions.map(q => q.baseline).join('\n');
   $('eval-source').replaceChildren();
   questions.forEach(q => {
-    const link = el('a', `题面来源 · v${q.version} / 规则 v${q.rubricVersion}`, 'text-button'); link.href = q.source; link.target = '_blank'; link.rel = 'noopener noreferrer'; $('eval-source').append(link);
+    const caption = `${q.title} · v${q.version} / 规则 v${q.rubricVersion}`;
+    if (/^https?:\/\//i.test(q.source || '')) {
+      const link = el('a', `${caption} · 题面来源`, 'text-button'); link.href = q.source; link.target = '_blank'; link.rel = 'noopener noreferrer'; $('eval-source').append(link);
+    } else $('eval-source').append(el('span', `${caption} · 本项目原创`, 'eval-question-source'));
   });
 }
 async function start(mode) {
   if (!$('eval-form').reportValidity()) return;
   if (state.pending || state.active) return;
   const data = plan();
+  if (!state.catalogReady) throw new Error('题库尚未加载完成，请等待或刷新页面后重试');
+  if (data.random_questions && !state.questions.some(q => q.animation)) throw new Error('暂无可用的动画题目，请关闭随机题目后选择固定题目');
   data.mode = mode;
   if (mode === 'once') { data.scope = 'simple'; data.repeats = 1; }
   // A simple single-round plan remains exactly one independent request.
@@ -74,7 +93,7 @@ function renderTasks() {
   if (!shown.length) target.append(el('p', '暂无后台评测任务。填写连接后，可以单次验证或开始持续循环。', 'field-help'));
   shown.forEach(task => {
     const item = el('div', null, 'eval-task'); item.dataset.active = String(activeTask(task));
-    const info = el('div'); info.append(el('strong', `${statusText(task.status)} · 第 ${task.round} 轮`), el('p', `${task.id.slice(0, 8)} · 已结束 ${task.completed_requests} 次 · 每轮 ${task.config.requests_per_round} 次 · ${task.config.scope === 'simple' ? '简单' : '批量'} / ${task.config.mode} · 并发 1`));
+    const info = el('div'); info.append(el('strong', `${statusText(task.status)} · 第 ${task.round} 轮`), el('p', `${task.id.slice(0, 8)} · 已结束 ${task.completed_requests} 次 · 每轮 ${task.config.requests_per_round} 次 · ${task.config.random_questions ? '随机动画题' : '固定题目'} · ${task.config.scope === 'simple' ? '简单' : '批量'} / ${task.config.mode} · 并发 1`));
     if (task.next_run_at) info.append(el('p', `下一轮：${timeText(task.next_run_at)}`));
     if (task.error) info.append(el('p', task.error, 'eval-error-text'));
     if (task.unsaved_sample) info.append(button('下载未保存样本', () => saveBlob(new Blob([JSON.stringify(task.unsaved_sample, null, 2)], { type: 'application/json' }), 'pelican-unsaved.json'), 'text-button'));
@@ -134,7 +153,7 @@ function scoreLabel(sample) {
 }
 function sampleCard(sample, selectable = true) {
   const card = el('article', null, 'eval-sample'), header = el('div', null, 'eval-sample-header');
-  header.append(el('h3', sample.requested_model));
+  const title = el('div'); title.append(el('h3', sample.requested_model), el('p', sample.question.title, 'eval-sample-question')); header.append(title);
   if (selectable) {
     const label = el('label', null, 'eval-check'), check = el('input'); check.type = 'checkbox'; check.checked = state.selected.has(sample.id); check.setAttribute('aria-label', `比较样本 ${sample.id.slice(0, 8)}`);
     check.addEventListener('change', () => { check.checked ? state.selected.set(sample.id, sample) : state.selected.delete(sample.id); updateCompare(); });
@@ -147,7 +166,7 @@ function sampleCard(sample, selectable = true) {
   if (sample.error) body.append(el('p', sample.error, 'eval-error-text'));
   const actions = el('div', null, 'eval-actions');
   actions.append(button('详情 / 原始输出', () => act(() => openDetail(sample.id))));
-  const review = button('看图评分', () => act(() => openReview(sample))); review.disabled = sample.status !== 'success' || !sample.render_evidence; actions.append(review);
+  const review = button('看图评分', () => act(() => openReview(sample))); review.disabled = sample.status !== 'success' || !sample.technical.safe || !sample.render_evidence || (sample.question.animation && !sample.svg?.trim()); actions.append(review);
   if (sample.svg) actions.append(button('SVG ↓', () => act(() => download(`/samples/${sample.id}/svg`, `pelican-${sample.id}.svg`)), 'text-button'));
   body.append(actions); card.append(body); return card;
 }
@@ -186,7 +205,7 @@ async function openDetail(identifier) {
   const { sample } = await api(`/samples/${identifier}`), area = $('sample-detail');
   $('sample-title').textContent = `${sample.requested_model} · ${sample.id.slice(0, 8)}`;
   area.replaceChildren(preview(sample), checks(sample), el('p', scoreLabel(sample), 'eval-score'));
-  area.append(el('p', `请求模型：${sample.requested_model}；返回模型：${sample.returned_model ?? '未知'}。模型名称不证明身份。`, 'field-help'), el('p', `开始 ${timeText(sample.started_at)}；结束 ${timeText(sample.ended_at)}`, 'field-help'));
+  area.append(el('h3', sample.question.title), el('pre', sample.question.prompt, 'eval-prompt'), details('本题评分依据', sample.question.scoringRubric), el('p', `请求模型：${sample.requested_model}；返回模型：${sample.returned_model ?? '未知'}。模型名称不证明身份。`, 'field-help'), el('p', `开始 ${timeText(sample.started_at)}；结束 ${timeText(sample.ended_at)}`, 'field-help'));
   const metadata = Object.fromEntries(Object.entries(sample).filter(([k]) => !['raw_output', 'raw_wire', 'svg', 'render_evidence', 'reviews', 'review_audit'].includes(k)));
   area.append(details('请求、Token、批次与参数明细', metadata), details('完整原始回答（只脱敏，不修图）', sample.raw_output), details('完整响应证据（SSE / JSON）', sample.raw_wire), details('评分理由、位置与修订记录', { reviews: sample.reviews, audit: sample.review_audit, recheck: sample.recheck }));
   const actions = el('div', null, 'eval-actions');
@@ -204,17 +223,21 @@ async function openDetail(identifier) {
 }
 async function openReview(sample, blind = null) {
   if (!blind) sample = (await api(`/samples/${sample.id}`)).sample;
-  const evidence = blind ? sample.image : sample.render_evidence?.data_url;
-  if (!evidence) throw new Error('图片证据尚未保存，请等待预览完成后再评分');
+  const animated = Boolean(sample.question.animation);
+  const evidence = reviewImage(sample, Boolean(blind));
+  if (!evidence) throw new Error(animated ? '此样本缺少可安全播放的原始 SVG，无法进行动画评分；请在详情中检查生成结果。' : '图片证据尚未保存，请等待预览完成后再评分');
   state.review = { sample, blind };
   $('review-title').textContent = blind ? `匿名评审 · ${sample.alias}` : `视觉评分 · ${sample.id.slice(0, 8)}`;
   const box = $('review-image'); box.replaceChildren();
-  const image = el('img'); image.src = evidence; image.alt = blind ? sample.alias : '本次评分依据的已保存图片';
+  const image = el('img'); image.src = evidence; image.alt = blind ? sample.alias : animated ? '本次评分依据的原始 SVG 动画' : '本次评分依据的已保存图片';
   const wrapper = el('div', null, 'eval-preview'); wrapper.append(image); box.append(wrapper);
-  box.append(el('p', '所有评审均使用这张已保存的图片。动画样本按首次加载后保存的画面评分。', 'field-help'));
+  box.append(el('h3', sample.question.title), el('pre', sample.question.prompt, 'eval-prompt'), el('p', animated ? '请观看上方原始动画至少一个完整周期，再按本题要求评分。静态截图不能评价运动，因此本题不提供 AI 看图评审。' : '所有评审均使用这张已保存的图片；此原题的评分仅依据静态画面。', 'field-help'));
   const rubric = sample.question.scoringRubric;
   $('review-scale').textContent = rubric.scale.map((s, i) => `${i}：${s}`).join('；');
   $('review-form').reset(); $('review-reviewer').readOnly = Boolean(blind); $('review-reviewer').value = blind?.reviewer || '';
+  $('review-animation-confirmation').hidden = !animated;
+  $('review-animation-observed').required = animated;
+  $('review-animation-observed').disabled = !animated;
   const dimensions = $('review-dimensions'); dimensions.replaceChildren();
   for (const dim of rubric.dimensions) {
     const row = el('section', null, 'eval-review-dimension'); row.append(el('h3', `${dim.id} · ${dim.title}`), el('p', dim.criteria));
@@ -226,7 +249,7 @@ async function openReview(sample, blind = null) {
     const locationLabel = el('label', '问题位置'); locationLabel.htmlFor = location.id; locationLabel.append(location);
     row.append(label, reasonLabel, locationLabel); dimensions.append(row);
   }
-  $('review-status').textContent = ''; $('ai-review-settings').hidden = Boolean(blind);
+  $('review-status').textContent = ''; $('ai-review-settings').hidden = Boolean(blind) || animated;
   $('review-dialog').showModal();
 }
 async function loadReport() {
@@ -282,7 +305,7 @@ $('review-form').addEventListener('submit', e => { e.preventDefault(); act(async
   $('review-fields').disabled = true;
   try {
     const path = blind ? `/blind/${blind.id}/${encodeURIComponent(sample.alias)}` : `/samples/${sample.id}/reviews`;
-    await api(path, { method: 'POST', body: { reviewer: $('review-reviewer').value, dimensions } });
+    await api(path, { method: 'POST', body: { reviewer: $('review-reviewer').value, dimensions, ...(sample.question.animation ? { animation_observed: $('review-animation-observed').checked } : {}) } });
     $('review-dialog').close(); message('人工评分已保存。'); if (blind) blind.buttons.get(sample.alias).textContent = '已提交 · 可修订'; await refresh();
   } finally { $('review-fields').disabled = false; }
 }); });
@@ -306,13 +329,20 @@ $('blind-start').addEventListener('click', () => act(async () => {
     const data = await api('/blind', { method: 'POST', body: { reviewer: $('blind-reviewer').value, filters: state.filters } });
     state.blind = { ...data, buttons: new Map() }; const area = $('blind-samples'); area.replaceChildren();
     if (!data.samples.length) area.append(el('p', '暂无可盲评的图片。请先在历史中查看并渲染成功样本。', 'eval-empty'));
-    data.samples.forEach(sample => { const card = el('article', null, 'eval-sample'), img = el('img'); img.src = sample.image; img.alt = sample.alias; const box = el('div', null, 'eval-preview'); box.append(img); const body = el('div', null, 'eval-sample-body'), action = button('独立评分', () => openReview(sample, state.blind)); body.append(action); card.append(el('h3', sample.alias, 'eval-sample-header'), box, body); area.append(card); state.blind.buttons.set(sample.alias, action); });
+    data.samples.forEach(sample => { const card = el('article', null, 'eval-sample'), img = el('img'); img.src = sample.image; img.alt = sample.alias; const box = el('div', null, 'eval-preview'); box.append(img); const body = el('div', null, 'eval-sample-body'), action = button('独立评分', () => act(() => openReview(sample, state.blind))); body.append(action); card.append(el('h3', sample.alias, 'eval-sample-header'), box, body); area.append(card); state.blind.buttons.set(sample.alias, action); });
   } finally { control.disabled = false; }
 }));
 document.addEventListener('visibilitychange', () => { if (!document.hidden) poll(); });
+updatePlan();
 await act(async () => {
-  const data = await api('/catalog'); state.questions = data.questions.filter(q => q.enabled);
-  state.questions.forEach((q, index) => { const option = new Option(q.title, q.id, index === 0, index === 0); $('eval-question').add(option); $('filter-question').add(new Option(q.title, q.id)); });
+  const data = await api('/catalog'); state.questions = data.questions.filter(q => q.enabled); state.catalogReady = true;
+  const categories = new Map();
+  state.questions.forEach((q, index) => {
+    const category = q.category || '其他题目';
+    if (!categories.has(category)) { const group = el('optgroup'); group.label = category; $('eval-question').append(group); categories.set(category, group); }
+    categories.get(category).append(new Option(q.title, q.id, index === 0, index === 0));
+    $('filter-question').add(new Option(q.title, q.id));
+  });
   updatePlan(); await refresh();
 });
 pollTimer = setTimeout(poll, 3000);

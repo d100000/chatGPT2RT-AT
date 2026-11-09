@@ -33,6 +33,9 @@
 .eval-sample { min-width: 0; border: 1px solid var(--rule); border-radius: var(--control-radius); overflow: hidden; background: var(--paper); }
 .eval-sample-header, .eval-sample-body { padding: var(--space-sm); }
 .eval-sample-header { display: flex; gap: var(--space-xs); align-items: start; justify-content: space-between; border-bottom: 1px solid var(--rule); }
+.eval-sample-header > div { min-width: 0; }
+.eval-sample-question { margin: var(--space-xs) 0 0; color: var(--muted); font-size: var(--eval-small-text); overflow-wrap: anywhere; }
+.eval-question-source { display: block; margin: var(--space-xs) 0; }
 .eval-sample h3 { overflow-wrap: anywhere; min-width: 0; }
 .eval-preview { display: flex; align-items: center; justify-content: center; background: var(--subtle); min-height: var(--eval-preview-height); }
 .eval-preview img { display: block; width: 100%; height: var(--eval-preview-height); object-fit: contain; }

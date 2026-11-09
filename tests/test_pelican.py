@@ -16,7 +16,7 @@ from rt_extractor.eval_catalog import catalog
 from rt_extractor.eval_protocol import body_for, endpoint, generate, models_endpoint, redact
 from rt_extractor.eval_reports import csv_export, html_export, review_summary
 from rt_extractor.eval_svg import CHECKER_VERSION, extract_svgs, inspect_svg, svg_hash, validate_png
-from rt_extractor.pelican import ACTIVE, COOKIE, HistoryError, PelicanService, configuration, plan_configuration
+from rt_extractor.pelican import ACTIVE, COOKIE, HistoryError, PelicanService, configuration, plan_configuration, round_requests
 from rt_extractor.web import create_app
 from tests.pelican_mock import SVG, mock_provider
 from tests.web_client import browser_headers
@@ -76,11 +76,50 @@ class ConfigAndSvgTests(unittest.TestCase):
         config, _ = plan_configuration({"base_url": "https://example.test", "api_key": KEY})
         self.assertEqual(config["models"], ["gpt-6.1-sol"])
         self.assertEqual(config["requests_per_round"], 1)
+        self.assertIs(config["random_questions"], True)
+        self.assertEqual(len(config["questions"]), 100)
+        self.assertTrue(all(q["animation"] for q in config["questions"]))
         batch, _ = plan_configuration({"base_url": "https://example.test", "api_key": KEY, "mode": "batch", "models": ["a", "b"]})
         self.assertEqual(batch["requests_per_round"], 6)
         loop, _ = plan_configuration({"base_url": "https://example.test", "api_key": KEY, "mode": "continuous", "interval_seconds": 999, "max_rounds": 1})
         self.assertEqual((loop["interval_seconds"], loop["max_rounds"]), (0, 0))
         with self.assertRaises(ValueError): plan_configuration({"base_url": "https://example.test", "api_key": KEY, "models": ["a", "b"]})
+
+    def test_random_switch_is_strict_and_fixed_baseline_remains_available(self):
+        base = {"base_url": "https://example.test", "api_key": KEY}
+        for value in (None, 0, 1, "true", "false", [], {}):
+            with self.subTest(value=value), self.assertRaises(ValueError):
+                plan_configuration(base | {"random_questions": value})
+        fixed, _ = plan_configuration(base | {"random_questions": False})
+        self.assertEqual([q["id"] for q in fixed["questions"]], ["pelican-bicycle"])
+        self.assertEqual(fixed["requests_per_round"], 1)
+        random, _ = plan_configuration(base | {"questions": ["stale-id"]})
+        self.assertEqual(len(random["questions"]), 100)
+        with self.assertRaises(ValueError):
+            plan_configuration(base | {"random_questions": False, "questions": ["stale-id"]})
+
+    def test_random_draws_share_each_prompt_across_models_and_exhaust_pool_across_rounds(self):
+        config, _ = plan_configuration({"base_url": "https://example.test", "api_key": KEY,
+                                       "mode": "batch", "models": ["one", "two"], "repeats": 7})
+        self.assertEqual(config["requests_per_round"], 14)
+        bag, draws = [], []
+        for _ in range(15):
+            requests = list(round_requests(config, bag))
+            self.assertEqual(len(requests), 14)
+            for index in range(0, len(requests), 2):
+                one, two = requests[index:index + 2]
+                self.assertEqual(one[0], two[0])
+                self.assertEqual((one[1], two[1]), ("one", "two"))
+                self.assertEqual(one[2], two[2])
+                draws.append(one[0]["id"])
+        self.assertEqual(len(set(draws[:100])), 100)
+        self.assertEqual(len(set(draws[100:])), 5)
+        self.assertTrue(set(draws[100:]) <= set(draws[:100]))
+
+    def test_legacy_plans_without_random_flag_keep_fixed_order(self):
+        config = {"questions": [{"id": "a"}, {"id": "b"}], "models": ["one", "two"], "repeats": 2}
+        rows = [(q["id"], model, repetition) for q, model, repetition in round_requests(config, [])]
+        self.assertEqual(rows, [(q, m, r) for q in ("a", "b") for m in ("one", "two") for r in (1, 2)])
 
     def test_svg_extraction_is_first_complete_and_never_repaired(self):
         raw = f"```svg\n{SVG}\n```\n<svg><g></svg>"
@@ -188,7 +227,7 @@ class ServiceTests(unittest.TestCase):
         self.temp.cleanup()
 
     def start(self, **options):
-        return self.service.start(self.owner, {"base_url": self.url, "api_key": KEY, "models": ["mock-good"], **options})
+        return self.service.start(self.owner, {"base_url": self.url, "api_key": KEY, "models": ["mock-good"], "random_questions": False, **options})
 
     def finish(self, batch):
         return wait_for(lambda: next((b for b in self.service.tasks(self.owner) if b["id"] == batch["id"] and b["status"] not in ACTIVE), None))
@@ -210,6 +249,40 @@ class ServiceTests(unittest.TestCase):
             self.assertEqual(call["body"]["input"], [{"role": "user", "content": catalog()[0]["prompt"]}])
         altered = catalog(); altered[0]["prompt"] = "new"
         self.assertEqual(self.service.samples(self.owner)[0]["question"]["prompt"], "Generate an SVG of a pelican riding a bicycle")
+
+    def test_random_plan_default_and_frozen_samples_match_actual_requests(self):
+        batch = self.service.start(self.owner, {"base_url": self.url, "api_key": KEY,
+                                               "models": ["mock-json"], "mode": "once"})
+        self.assertIs(batch["config"]["random_questions"], True)
+        frozen = {q["id"]: deepcopy(q) for q in batch["config"]["questions"]}
+        for q in batch["config"]["questions"]:
+            q.update(prompt="changed after submission", title="changed")
+        result = self.finish(batch)
+        self.assertEqual(result["completed_requests"], 1)
+        sample = self.service.samples(self.owner)[0]
+        self.assertTrue(sample["random_questions"])
+        self.assertEqual(sample["question"], frozen[sample["question"]["id"]])
+        self.assertEqual(self.server.requests[0]["body"]["input"], [{"role": "user", "content": sample["question"]["prompt"]}])
+        self.assertNotIn("random_questions", sample["parameters"])
+        self.assertNotIn("questions", sample["parameters"])
+        self.assertEqual(self.service.export(self.owner)["samples"][0]["question"], sample["question"])
+
+    def test_random_scheduled_rounds_share_questions_and_continue_draw_bag(self):
+        batch = self.start(random_questions=True, mode="scheduled", scope="batch", repeats=2,
+                           models=["mock-good", "mock-json"], max_rounds=2, interval_seconds=0)
+        result = self.finish(batch)
+        self.assertEqual(result["completed_requests"], 8)
+        rows = self.service.samples(self.owner)
+        draws = []
+        for round_number in (1, 2):
+            for repetition in (1, 2):
+                group = [r for r in rows if r["round"] == round_number and r["repetition"] == repetition]
+                self.assertEqual(len(group), 2)
+                self.assertEqual({r["requested_model"] for r in group}, {"mock-good", "mock-json"})
+                self.assertEqual(group[0]["question"], group[1]["question"])
+                draws.append(group[0]["question"]["id"])
+        self.assertEqual(len(set(draws)), 4)
+        self.assertEqual(self.server.max_active, 1)
 
     def test_continuous_multiple_rounds_ignores_schedule_and_stops_without_new_requests(self):
         batch = self.start(mode="continuous", interval_seconds=9999, max_rounds=1)
@@ -258,7 +331,7 @@ class ServiceTests(unittest.TestCase):
         self.assertEqual(len(self.server.requests), 1)
 
     def test_stop_inflight_keeps_partial_and_never_launches_next(self):
-        batch = self.start(mode="continuous", models=["mock-slow"])
+        batch = self.start(mode="continuous", models=["mock-slow"], random_questions=True)
         wait_for(lambda: self.service.samples(self.owner) and self.service.samples(self.owner)[0].get("raw_output"))
         self.service.stop(self.owner, batch["id"])
         result = self.finish(batch)
@@ -349,6 +422,46 @@ class ServiceTests(unittest.TestCase):
         repeated = self.service.render(self.owner, sample["id"], {"success": True, "svg_sha256": svg_hash(sample["svg"]), "png": "invalid-replacement"})
         self.assertEqual(evidence["render_evidence"], repeated["render_evidence"])
         self.assertEqual(evidence["render_evidence"]["capture_policy"], "first-loaded-frame-v1")
+
+    def test_animation_reviews_require_observation_and_blind_review_receives_animation(self):
+        animation_id = next(q["id"] for q in catalog() if q.get("animation"))
+        self.finish(self.start(models=["mock-animated"], questions=[animation_id]))
+        sample = self.service.samples(self.owner)[0]
+        sample = self.service.render(self.owner, sample["id"], {"success": True, "svg_sha256": svg_hash(sample["svg"]), "png": png_fixture()})
+        for confirmation in (None, False, 1, "true"):
+            with self.subTest(confirmation=confirmation), self.assertRaises(ValueError):
+                self.service.add_review(self.owner, sample["id"], review(3) | {"animation_observed": confirmation})
+        first = self.service.add_review(self.owner, sample["id"], review(3) | {"animation_observed": True})
+        evidence = first["reviews"][0]
+        self.assertEqual(evidence["evidence_type"], "svg-animation")
+        self.assertEqual(evidence["svg_sha256"], svg_hash(sample["svg"]))
+        self.assertIs(evidence["animation_observed"], True)
+        self.assertEqual(evidence["image_sha256"], sample["render_evidence"]["sha256"])
+        blind = self.service.blind(self.owner, "two", {})
+        anonymous = blind["samples"][0]
+        self.assertEqual(set(anonymous), {"alias", "image", "question"})
+        self.assertTrue(anonymous["image"].startswith("data:image/svg+xml;base64,"))
+        self.assertEqual(base64.b64decode(anonymous["image"].split(",", 1)[1]).decode(), sample["svg"])
+        self.assertNotIn("mock-animated", json.dumps(blind))
+        self.assertNotIn(sample["id"], json.dumps(blind))
+        with self.assertRaises(ValueError):
+            self.service.blind_review(self.owner, blind["id"], anonymous["alias"], review(4))
+        self.service.blind_review(self.owner, blind["id"], anonymous["alias"], review(4) | {"animation_observed": True})
+        saved = self.service.history.get("sample", self.owner, sample["id"])
+        self.assertTrue(saved["reviews"][1]["blind"])
+        self.assertTrue(saved["reviews"][1]["animation_observed"])
+
+    def test_animation_ai_review_rejects_static_frame_before_upstream_request(self):
+        self.finish(self.start(models=["mock-animated"], random_questions=True))
+        sample = self.service.samples(self.owner)[0]
+        self.service.render(self.owner, sample["id"], {"success": True, "svg_sha256": svg_hash(sample["svg"]), "png": png_fixture()})
+        requests_before = len(self.server.requests)
+        with self.assertRaisesRegex(ValueError, "单帧"):
+            asyncio.run(self.service.ai_review(self.owner, sample["id"], {"base_url": self.url, "api_key": KEY,
+                       "model": "mock-judge", "enabled": True, "vision_confirmed": True}))
+        self.assertEqual(len(self.server.requests), requests_before)
+        self.assertEqual(self.service.history.all("ai_attempt", self.owner), [])
+        self.assertFalse(self.service.ai_running)
 
     def test_invalid_and_cancelled_outputs_cannot_be_scored(self):
         self.finish(self.start(models=["mock-unsafe"]))

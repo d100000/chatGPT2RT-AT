@@ -1,6 +1,8 @@
 """Versioned task definitions. A batch copies these values before any request."""
 from copy import deepcopy
 
+from .animation_catalog import ANIMATION_QUESTIONS
+
 DISCLAIMER = "本项目视觉任务评分，不是官方基准分或 IQ；不能代表总体智力，也不能证明接口上游模型身份。"
 RUBRIC = {
     "version": "1.0", "name": "本项目鹈鹕视觉评分", "maximum": 20,
@@ -25,15 +27,20 @@ QUESTIONS = [{
     "scoringRubric": RUBRIC, "rubricVersion": "1.0", "enabled": True,
     "mode": "original-baseline", "official": False,
     "baseline": "原题逐字发送；仅一条用户消息，无系统消息、工具、上下文、修图或自动重试。预览第一个完整 SVG，原始回答完整保留（密钥脱敏除外）。",
-}]
+}] + ANIMATION_QUESTIONS
 
 
 def catalog():
     return deepcopy(QUESTIONS)
 
 
+def animation_question_snapshot():
+    """Freeze the enabled animation pool without including the static baseline."""
+    return deepcopy([q for q in QUESTIONS if q["enabled"] and q.get("animation")])
+
+
 def question_snapshot(ids):
     lookup = {q["id"]: q for q in QUESTIONS if q["enabled"]}
-    if not isinstance(ids, list) or not ids or len(ids) > 30 or any(i not in lookup for i in ids):
+    if not isinstance(ids, list) or not ids or len(ids) > 30 or any(not isinstance(i, str) or i not in lookup for i in ids):
         raise ValueError("请选择已启用的题目")
     return [deepcopy(lookup[i]) for i in dict.fromkeys(ids)]

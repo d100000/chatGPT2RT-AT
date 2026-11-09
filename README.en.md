@@ -29,7 +29,7 @@ The project is independent and unofficial, with no affiliation with or endorseme
 | Token extraction | `/` | Batch login, email-code handling, complete RT / AT / ID Token results and browser-generated exports |
 | Authentication converter | `/converter` | Convert existing CPA ↔ Sub2API JSON in the browser, including recently received extraction results |
 | IP diagnostics | `/network` | Inspect the browser's exit IP, location, available IPOK risk score and supporting evidence |
-| Pelican evaluation | `/pelican` | Repeat an SVG generation task, compare samples, collect human or optional AI reviews and export reports |
+| SVG animation evaluation | `/pelican` | Random draws from 100 animation tasks by default, fixed-task selection, human animation reviews and report exports |
 | Concurrency benchmark | `/benchmark` | Compare models across concurrency levels and input modes using latency, throughput, success and cache metrics |
 
 Token extraction also has a single-account CLI and Python API. Model evaluation and benchmarking use an API connection you configure separately.
@@ -114,9 +114,9 @@ Manually imported content is processed in page memory. Conversion maps existing 
 
 `/network` requests IPOK diagnostics directly from the browser. It displays the available location, official risk score and evidence status. The browser's network exit can differ from the proxy used by the Python login process; an unavailable score is not a clean-IP result.
 
-### Pelican SVG evaluation
+### SVG animation evaluation
 
-`/pelican` runs the “pelican riding a bicycle” SVG task through a configured Responses or Chat Completions endpoint. It supports single runs, batches, scheduled repetition, continuous loops, sample comparisons, human scoring, blind reviews and optional AI image reviews.
+`/pelican` provides 100 original SVG animation tasks through a configured Responses or Chat Completions endpoint. Random questions are on by default: each draw is shared by all selected models, without replacement until the pool is exhausted. Turn the switch off to select fixed tasks, including the unchanged “pelican riding a bicycle” baseline. Single runs, batches, scheduled runs and continuous loops are supported. Animation reviews require watching a full cycle; optional AI image reviews remain available for the static baseline only.
 
 History includes original outputs, technical checks and review evidence, with JSON / CSV / HTML / SVG exports. This is a specific visual-task evaluation, not an IQ test, general intelligence score or proof of upstream model identity. See [the Pelican guide](docs/PELICAN.md) for rules and storage details.
 
