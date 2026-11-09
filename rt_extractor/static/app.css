@@ -88,7 +88,7 @@ h3 { margin: 0; font-size: 13px; font-weight: 600; }
   --promotion-gold: #f2d28e; --promotion-text: #fff9ed;
   --promotion-muted: #c6cfde; --promotion-rule: #f2d28e38;
   --promotion-price-size: 32px;
-  margin-bottom: var(--space-sm); padding: var(--space-md) var(--pane-inset);
+  margin-bottom: var(--space-lg); padding: var(--space-md) var(--pane-inset);
   border: 1px solid var(--promotion-rule); border-radius: var(--radius);
   color: var(--promotion-text); background: linear-gradient(110deg, var(--promotion-bg), var(--promotion-bg-end));
 }
