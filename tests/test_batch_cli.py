@@ -200,6 +200,17 @@ class GroupedCliTests(unittest.TestCase):
             self.run_grouped(parse_grouped_accounts(line(1)), forbidden)
         self.assertEqual(sentinel.read_text(), "keep")
 
+    def test_main_returns_failure_when_accounts_succeed_but_group_export_fails(self):
+        input_file = self.root / "input.txt"
+        input_file.write_text(line(1))
+        report = {"status": "completed", "counts": {"success": 1, "error": 0},
+                  "groups": [{"conversion_status": "error"}]}
+        with patch("rt_extractor.batch_cli.run_groups", return_value=report) as run:
+            code = main(["--input", str(input_file), "--output-dir", str(self.output)])
+        self.assertEqual(code, 1)
+        run.assert_called_once()
+        self.assertEqual(report["counts"]["success"], 1)
+
 
 if __name__ == "__main__":
     unittest.main()

@@ -252,7 +252,8 @@ def main(argv: list[str] | None = None) -> int:
             os._exit(130)
         if result["status"] == "cancelled":
             return 130
-        return 1 if result["counts"]["error"] else 0
+        export_failed = any(group.get("conversion_status") == "error" for group in result["groups"])
+        return 1 if result["counts"]["error"] or export_failed else 0
     except BatchInputError as exc:
         print(json.dumps({"status": "invalid_input", "errors": exc.errors}, ensure_ascii=False), flush=True)
         return 2

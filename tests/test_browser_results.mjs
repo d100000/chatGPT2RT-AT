@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
-import { createBrowserResultStore, createResultCollector, resultDownload, cachedBatchWithoutServer, RESULT_CACHE_PREFIX, RESULT_CACHE_TTL } from '../rt_extractor/static/browser-results.mjs';
+import { createBrowserResultStore, createResultCollector, resultDownload, cachedBatchWithoutServer, RESULT_CACHE_PREFIX, RESULT_CLEAR_PREFIX, RESULT_CACHE_TTL } from '../rt_extractor/static/browser-results.mjs';
 
 export const owner = 'synthetic-owner-1234567890';
 export const record = (id = 'a'.repeat(32), line = 1) => ({ id, line, email: `synthetic-${line}@example.com`,
@@ -285,4 +285,50 @@ test('an entirely skipped batch completes handoff without producing downloadable
   assert.equal(store.read().batch.counts.skipped, 1);
   assert.equal(store.read().records.length, 0);
   assert.throws(() => resultDownload(store.read(), 'rt'), /尚未接收到/);
+});
+
+test('explicit clear publishes an owner-only revision while natural TTL expiry never advances it', () => {
+  const storage = storageMock(); let now = 1000; const published = [];
+  const first = createBrowserResultStore({ owner, storage, now: () => now, onClear: (revision) => published.push(revision) });
+  const second = createBrowserResultStore({ owner, storage, now: () => now });
+  first.save(batch(), [record()]); now += RESULT_CACHE_TTL;
+  assert.equal(first.read(), null);
+  assert.equal(first.clearRevision(), ''); assert.equal(second.receiveClear(), false);
+  first.save(batch(), [record()]); first.clear();
+  assert.equal(storage.length, 1);
+  assert.equal(storage.key(0), RESULT_CLEAR_PREFIX + owner);
+  assert.match(storage.getItem(storage.key(0)), /^\d+:[a-z0-9]+$/);
+  assert.equal(published.length, 1);
+  assert.equal(second.clearRevision(), published[0]);
+  assert.equal(second.receiveClear(), true); assert.equal(second.receiveClear(), false);
+  assert.equal(second.read(), null);
+});
+
+test('a delayed clear channel message cannot replace a newer stored clear generation', () => {
+  const storage = storageMock(); let now = 1000;
+  const first = createBrowserResultStore({ owner, storage, now: () => now });
+  const second = createBrowserResultStore({ owner, storage, now: () => now });
+  first.clear(); const older = first.clearRevision(); now++;
+  first.clear(); const newer = first.clearRevision();
+  assert.equal(second.receiveClear(older), false);
+  assert.equal(second.receiveClear(newer), true);
+  assert.equal(second.clearRevision(), newer);
+  assert.equal(second.receiveClear(older), false);
+});
+
+test('clear notifications also discard page-memory fallback results without persisting Tokens', () => {
+  const clearStorage = storageMock(); let revision;
+  const first = createBrowserResultStore({ owner, clearStorage, onClear: (value) => { revision = value; } });
+  const second = createBrowserResultStore({ owner, clearStorage });
+  second.save(batch(), [record()]);
+  first.clear();
+  assert.equal(second.receiveClear(revision), true);
+  assert.equal(second.read(), null);
+  assert.equal(clearStorage.length, 1);
+  assert.doesNotMatch(clearStorage.getItem(clearStorage.key(0)), /synthetic-|token|password/);
+  const memoryOnly = createBrowserResultStore({ owner });
+  memoryOnly.save(batch(), [record()]);
+  assert.equal(memoryOnly.receiveClear(revision), true);
+  assert.equal(memoryOnly.read(), null);
+  assert.equal(memoryOnly.receiveClear('untrusted invalid marker'), false);
 });

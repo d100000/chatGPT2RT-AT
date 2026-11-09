@@ -1,6 +1,7 @@
 import { buildZipArchive } from './archive.mjs';
 
 export const RESULT_CACHE_PREFIX = 'bob-ai-browser-results-v3:';
+export const RESULT_CLEAR_PREFIX = 'bob-ai-browser-results-cleared:';
 export const RESULT_CACHE_TTL = 30 * 60 * 1000;
 const MAX_BYTES = 20 * 1024 * 1024;
 const terminal = (batch) => batch && ['completed', 'cancelled'].includes(batch.status);
@@ -40,9 +41,13 @@ function safeRecord(record) {
     raw, cpa: clean(record.cpa), sub2api: clean(record.sub2api) };
 }
 
-export function createBrowserResultStore({ owner, storage, now = Date.now, maxBytes = MAX_BYTES, storageMode = 'session' } = {}) {
+export function createBrowserResultStore({ owner, storage, clearStorage = storage, now = Date.now, maxBytes = MAX_BYTES, storageMode = 'session', onClear } = {}) {
   const validOwner = typeof owner === 'string' && /^[A-Za-z0-9_-]{16,128}$/.test(owner);
   const key = validOwner ? RESULT_CACHE_PREFIX + owner : null;
+  const clearKey = validOwner ? RESULT_CLEAR_PREFIX + owner : null;
+  let clearRevision = '';
+  const storedClearRevision = () => { try { return clearKey ? clearStorage?.getItem(clearKey) || '' : ''; } catch { return ''; } };
+  clearRevision = storedClearRevision();
   let state = null, persistence = key && storage ? storageMode : 'memory', notice = key && storage ? '' : '浏览器不支持安全共享缓存，结果仅保留在当前页面内存；请下载后再离开或刷新。';
   let lastSerialized = null;
   const remove = () => { try { if (key) storage?.removeItem(key); } catch {} };
@@ -86,7 +91,8 @@ export function createBrowserResultStore({ owner, storage, now = Date.now, maxBy
     try {
       for (let index = storage.length - 1; index >= 0; index -= 1) {
         const oldKey = storage.key(index);
-        if (oldKey?.startsWith(RESULT_CACHE_PREFIX) && oldKey !== key) storage.removeItem(oldKey);
+        if ((oldKey?.startsWith(RESULT_CACHE_PREFIX) && oldKey !== key)
+            || (oldKey?.startsWith(RESULT_CLEAR_PREFIX) && oldKey !== clearKey)) storage.removeItem(oldKey);
       }
     } catch { persistence = 'memory'; }
     sync();
@@ -99,6 +105,16 @@ export function createBrowserResultStore({ owner, storage, now = Date.now, maxBy
   const read = () => { const value = live(); return value ? clone(value) : null; };
   return {
     owner, read,
+    clearRevision() { return storedClearRevision() || clearRevision; },
+    receiveClear(revision = storedClearRevision()) {
+      // A delayed channel message must not overwrite a newer storage marker.
+      const stored = storedClearRevision();
+      if (stored && stored !== revision) return false;
+      if (typeof revision !== 'string' || !/^\d+:[a-z0-9]+$/.test(revision) || revision.length > 64 || revision === clearRevision) return false;
+      if (!stored && Number(revision.split(':')[0]) < Number(clearRevision.split(':')[0])) return false;
+      clearRevision = revision; state = null; lastSerialized = null;
+      return true;
+    },
     status() { return { persistence, notice }; },
     save(batch, incoming = []) {
       let normalized = safeBatch(batch);
@@ -136,7 +152,14 @@ export function createBrowserResultStore({ owner, storage, now = Date.now, maxBy
     },
     markCollected(id) { if (live()?.batch.id === id) { state.collected = true; publish(); } },
     record(id) { const record = live()?.records.find((item) => item.id === id); return record ? clone(record) : null; },
-    clear() { state = null; lastSerialized = null; notice = ''; remove(); },
+    clear() {
+      // Only an explicit clear advances this marker. Natural cache expiry must
+      // not cancel a grouped plan waiting for the next hourly submission quota.
+      clearRevision = `${now()}:${Math.random().toString(36).slice(2)}`;
+      try { if (clearKey) clearStorage?.setItem(clearKey, clearRevision); } catch {}
+      state = null; lastSerialized = null; notice = ''; remove();
+      try { onClear?.(clearRevision); } catch {}
+    },
   };
 }
 
@@ -158,12 +181,19 @@ export function cachedBatchWithoutServer(store, expectedId) {
 let runtimeStore;
 export function getBrowserResults() {
   if (!runtimeStore) {
-    let storage;
+    let storage, clearStorage, channel;
     // Without cross-tab locking, keep credentials only in this page. A copied
     // sessionStorage marker must never let a second tab take and ACK results.
-    try { if (globalThis.navigator?.locks?.request) storage = globalThis.localStorage; } catch {}
-    runtimeStore = createBrowserResultStore({ owner: globalThis.document?.querySelector('meta[name="rt-workspace"]')?.content, storage, storageMode: 'local' });
+    try { clearStorage = globalThis.localStorage; if (globalThis.navigator?.locks?.request) storage = clearStorage; } catch {}
+    const owner = globalThis.document?.querySelector('meta[name="rt-workspace"]')?.content;
+    try { if (owner && globalThis.BroadcastChannel) channel = new BroadcastChannel(RESULT_CLEAR_PREFIX + owner); } catch {}
+    runtimeStore = createBrowserResultStore({ owner, storage, clearStorage, storageMode: 'local', onClear: (revision) => channel?.postMessage({ revision }) });
+    const receiveClear = (revision) => {
+      if (runtimeStore.receiveClear(revision)) globalThis.document?.dispatchEvent(new CustomEvent('rt:browser-results-cleared'));
+    };
+    if (channel) channel.onmessage = (event) => receiveClear(event.data?.revision);
     globalThis.addEventListener?.('storage', (event) => {
+      if (event.key === null || event.key === RESULT_CLEAR_PREFIX + runtimeStore.owner) receiveClear();
       if (event.key !== null && event.key !== RESULT_CACHE_PREFIX + runtimeStore.owner) return;
       runtimeStore.read();
       globalThis.document?.dispatchEvent(new CustomEvent('rt:browser-results'));

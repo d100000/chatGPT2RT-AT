@@ -20,6 +20,7 @@ function clock() {
   return {
     Date: class extends Date { static now() { return time; } },
     now: () => time,
+    elapse(ms) { time += ms; },
     setTimeout(fn, delay = 0) { const id = ++next; timers.set(id, { fn, at: time + delay }); return id; },
     clearTimeout(id) { timers.delete(id); },
     async advance(ms) {
@@ -253,4 +254,103 @@ test('clearing while a failed handoff rechecks task state cannot resurrect the t
   assert.equal(page.byId('count-total').textContent, '0');
   assert.equal(page.byId('active-panel').hidden, true);
   assert.equal(page.byId('form-error-message').textContent, '');
+});
+
+test('an active result cache expiry clears stale download claims and RT without cancelling the task', async () => {
+  const cached = fixture({ success: 91, error: 183, running: 3, queued: 627 });
+  const calls = [];
+  const page = await uiPage('app.js', async (path, options = {}) => {
+    calls.push({ path, method: options.method || 'GET' });
+    return response(200, path.endsWith('/current') ? { batch: cached.batch } : cached.batch);
+  }, { cached });
+  await page.created.find((element) => element.textContent === '查看 RT').click();
+  assert.equal(page.byId('rt-value').value, 'synthetic-rt');
+  page.document.hidden = true;
+  page.document.dispatchEvent({ type: 'visibilitychange' });
+  await page.time.advance(browserResults.RESULT_CACHE_TTL + 1);
+  assert.equal(page.store.read(), null);
+  assert.equal(page.byId('downloads').hidden, true);
+  assert.equal(page.byId('conversion-status').textContent, '');
+  assert.doesNotMatch(page.byId('results-body').textContent, /查看 RT|原始 JSON ↓|CPA JSON ↓/);
+  assert.equal(page.byId('rt-dialog').open, false);
+  assert.equal(page.byId('rt-value').value, '');
+  assert.equal(page.byId('rt-copy-button').disabled, true);
+  assert.equal(page.byId('count-progress').textContent, '274 / 904');
+  assert.equal(page.byId('active-panel').hidden, false);
+  assert.equal(page.byId('credentials-fields').disabled, true);
+  assert.match(page.byId('browser-cache-status').textContent, /成功数量是任务处理记录.*没有可下载/);
+  page.document.hidden = false;
+  page.document.dispatchEvent({ type: 'visibilitychange' });
+  await page.time.advance(0);
+  assert.ok(calls.some((call) => call.path === '/api/batches/synthetic-batch'));
+  assert.ok(calls.every((call) => call.method === 'GET'), 'cache expiry must not send cancellation or acknowledgement');
+});
+
+test('a download click noticing a missing cache immediately removes stale download actions', async () => {
+  const cached = fixture();
+  const page = await uiPage('app.js', async () => response(200, { batch: cached.batch }), { cached });
+  page.store.clear(); // No storage event is delivered to the writing page.
+  await page.byId('rt-button').click();
+  assert.equal(page.byId('downloads').hidden, true);
+  assert.equal(page.byId('conversion-status').textContent, '');
+  assert.doesNotMatch(page.byId('results-body').textContent, /查看 RT|JSON ↓/);
+  assert.equal(page.byId('active-panel').hidden, false);
+  assert.equal(page.byId('count-pending').textContent, '1');
+  assert.match(page.byId('form-error-message').textContent, /缓存已过期或被清除/);
+});
+
+test('a completed result cache still clears its finished view when it expires', async () => {
+  const cached = { ...fixture({ success: 1, running: 0 }), collected: true };
+  const page = await uiPage('app.js', async () => response(200, { batch: null }), { cached });
+  await page.time.advance(browserResults.RESULT_CACHE_TTL + 1);
+  assert.equal(page.store.read(), null);
+  assert.equal(page.byId('downloads').hidden, true);
+  assert.equal(page.byId('conversion-status').textContent, '');
+  assert.equal(page.byId('count-total').textContent, '0');
+  assert.equal(page.byId('start-button').disabled, false);
+});
+
+test('returning from a suspended page checks cache expiry before timers or network responses', async () => {
+  const cached = fixture();
+  const page = await uiPage('app.js', async () => response(200, { batch: cached.batch }), { cached });
+  page.document.hidden = true;
+  page.document.dispatchEvent({ type: 'visibilitychange' });
+  page.time.elapse(browserResults.RESULT_CACHE_TTL + 1);
+  page.document.hidden = false;
+  page.document.dispatchEvent({ type: 'visibilitychange' });
+  assert.equal(page.store.read(), null);
+  assert.equal(page.byId('downloads').hidden, true);
+  assert.equal(page.byId('conversion-status').textContent, '');
+  assert.equal(page.byId('active-panel').hidden, false);
+});
+
+test('cross-tab natural cache removal clears result affordances and keeps polling the known active task', async () => {
+  const cached = fixture(); let stateCalls = 0;
+  const page = await uiPage('app.js', async (path) => {
+    if (path.endsWith('/current')) return response(200, { batch: cached.batch });
+    stateCalls++; return response(200, cached.batch);
+  }, { cached });
+  page.storage.removeItem(browserResults.RESULT_CACHE_PREFIX + page.store.owner);
+  page.document.dispatchEvent({ type: 'rt:browser-results' });
+  assert.equal(page.byId('downloads').hidden, true);
+  assert.equal(page.byId('conversion-status').textContent, '');
+  assert.equal(page.byId('active-panel').hidden, false);
+  await page.time.advance(0);
+  assert.equal(stateCalls, 1);
+  assert.equal(page.store.read(), null, 'a removed result marker must not be silently recreated');
+  assert.equal(page.byId('count-pending').textContent, '1');
+});
+
+test('a cache renewed elsewhere is not erased by the old expiry timer and gets a new expiry check', async () => {
+  const cached = fixture({ success: 1, running: 0 });
+  cached.collected = true;
+  const page = await uiPage('app.js', async () => response(200, { batch: null }), { cached });
+  page.time.elapse(browserResults.RESULT_CACHE_TTL - 10);
+  page.store.save(cached.batch, cached.records);
+  await page.time.advance(11);
+  assert.equal(page.store.read().records.length, 1);
+  assert.equal(page.byId('downloads').hidden, false);
+  await page.time.advance(browserResults.RESULT_CACHE_TTL);
+  assert.equal(page.store.read(), null);
+  assert.equal(page.byId('downloads').hidden, true);
 });

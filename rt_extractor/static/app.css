@@ -11,6 +11,7 @@
   --space-xs: 6px; --space-sm: 12px; --space-md: 20px; --space-lg: 28px; --space-xl: 36px;
   --radius: 12px; --control-radius: 7px; --control-height: 44px;
   --pane-inset: 26px; --nav-inset: 22px; --preview-height: 55vh;
+  --queue-archive-max-height: 320px;
   --elevation-dialog: 0 18px 65px #17233d26;
 }
 * { box-sizing: border-box; }
@@ -203,6 +204,13 @@ input:disabled, textarea:disabled, select:disabled { background: var(--canvas); 
 #count-error, #convert-count-error { color: var(--error); }
 #count-skipped { color: var(--muted); }
 .extraction-counts { grid-template-columns: repeat(5, minmax(0, 1fr)); }
+.batch-queue-panel { margin-bottom: var(--space-md); padding-block: var(--space-sm); border-block: 1px solid var(--rule); }
+.batch-queue-panel progress { margin-top: var(--space-sm); }
+#queue-retention { color: var(--warning); }
+.queue-archives { max-height: var(--queue-archive-max-height); overflow: auto; }
+.queue-archive { padding-top: var(--space-sm); margin-top: var(--space-sm); border-top: 1px solid var(--rule); }
+.queue-archive p { margin: 0 0 var(--space-xs); overflow-wrap: anywhere; }
+.queue-archive .download-actions { margin: 0; }
 .extraction-counts > div { padding-left: var(--space-xs); }
 @media (max-width: 760px) { .batch-counts.extraction-counts strong { font-size: 20px; } }
 @media (max-width: 380px) { .batch-counts.extraction-counts strong { font-size: 18px; } .batch-counts.extraction-counts > div { padding-left: var(--space-xs); } }

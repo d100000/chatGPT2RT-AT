@@ -1,5 +1,6 @@
 import { createRequestCooldowns, rateLimitError, requestLimitAction } from './request-limits.mjs';
 import { getBrowserResults, collectBatchResults, isBatchCollected, resetResultCollection, resultDownload, cachedBatchWithoutServer, withBrowserResultLock } from './browser-results.mjs';
+import { createBatchQueue } from './batch-queue.mjs';
 
 (() => {
   'use strict';
@@ -25,6 +26,7 @@ import { getBrowserResults, collectBatchResults, isBatchCollected, resetResultCo
   let cooldownTimer = null;
   const cooldowns = createRequestCooldowns({ now: () => Date.now() });
   const resultStore = getBrowserResults();
+  let workspaceRevision = resultStore.clearRevision?.() || '';
   let clearing = false;
   let cleanupRetry = false;
   let expiryTimer = null;
@@ -33,6 +35,10 @@ import { getBrowserResults, collectBatchResults, isBatchCollected, resetResultCo
   let networkNotice = false;
   let rtAccount = null;
   let rtGeneration = 0;
+  let sequence = null;
+  let sequenceTimer = null;
+  let sequenceGeneration = 0;
+  let sequenceArchiveSignature = '';
 
   function showError(message, errors = []) {
     byId('form-error-message').textContent = message || '';
@@ -103,23 +109,167 @@ import { getBrowserResults, collectBatchResults, isBatchCollected, resetResultCo
 
   function updateCount() {
     const count = inputCount();
-    byId('import-count').textContent = `已输入 ${count.toLocaleString('zh-CN')} 条${count > maxAccounts ? '，超过 1,000 条上限' : ''}`;
-    byId('import-count').classList.toggle('over-limit', count > maxAccounts);
+    byId('import-count').textContent = `已输入 ${count.toLocaleString('zh-CN')} 条${count > maxAccounts ? `，将分为 ${Math.ceil(count / maxAccounts)} 组依次处理` : ''}`;
+    byId('import-count').classList.remove('over-limit');
+  }
+
+  function sequenceActive() { return !!sequence?.active(); }
+  function canPollInBackground() { return sequenceActive(); }
+
+  function renderSequence() {
+    const panel = byId('batch-queue-panel');
+    if (!panel) return;
+    panel.hidden = !sequence;
+    if (!sequence) return;
+    const plan = sequence.snapshot(batch);
+    const labels = { ready: '准备下一组', submitting: '正在提交', running: '分组处理中', waiting: '等待服务额度', completed: '全部分组结束', stopped: '分组已停止', cleared: '已清空' };
+    byId('queue-status').textContent = labels[plan.state];
+    byId('queue-progress-label').textContent = `第 ${plan.group} / ${plan.groupCount} 组 · 已处理 ${plan.processed.toLocaleString('zh-CN')} / ${plan.total.toLocaleString('zh-CN')} 条`;
+    byId('queue-progress').max = plan.total || 1;
+    byId('queue-progress').value = plan.processed;
+    byId('queue-message').textContent = plan.state === 'waiting'
+      ? `${plan.message} ${plan.retrySeconds} 秒后自动提交第 ${plan.group} 组。可随时停止后续分组。`
+      : plan.message || (plan.state === 'completed' ? '所有分组已完成结果交接，可按组下载。' : '当前组结束并完整接收结果后，才会提交下一组。');
+    byId('queue-retention').textContent = plan.expiresAt
+      ? `分组归档仅在本页内存中，还剩 ${Math.max(0, Math.ceil((plan.expiresAt - Date.now()) / 60000))} 分钟；刷新或关闭页面会丢失，请及时按组下载。`
+      : '后续账号与分组归档仅在本页内存中。刷新、关闭或设备休眠可能中断计划；请按组及时下载。归档最多 20 MiB，计划结束或停止后保留 30 分钟。';
+    const signature = JSON.stringify(plan.archives);
+    if (signature !== sequenceArchiveSignature) {
+      sequenceArchiveSignature = signature;
+      const list = byId('queue-archives');
+      list.replaceChildren();
+      for (const archive of plan.archives) {
+        const row = document.createElement('div'); row.className = 'queue-archive';
+        const label = document.createElement('p'); label.className = 'field-help';
+        label.textContent = `第 ${archive.number} 组 · ${archive.count} 条 · 成功 ${archive.counts.success} · 失败 ${archive.counts.error} · 跳过 ${archive.counts.skipped || 0}${archive.available ? '' : ' · 归档已过期'}`;
+        row.append(label);
+        if (archive.available && archive.counts.success) {
+          const actions = document.createElement('div'); actions.className = 'download-actions';
+          for (const [kind, text] of [['raw', '原始 ZIP'], ['cpa', 'CPA ZIP'], ['sub2api', 'Sub2API JSON'], ['rt', 'RT 文本']]) {
+            const button = document.createElement('button'); button.type = 'button'; button.className = 'button button-secondary'; button.textContent = text;
+            button.setAttribute('aria-label', `下载第 ${archive.number} 组 ${text}`);
+            button.addEventListener('click', () => {
+              const result = sequence?.archive(archive.number);
+              if (!result) { renderSequence(); showError('该分组归档已过期或被清除。'); return; }
+              downloadSnapshot(result, kind, button);
+            });
+            actions.append(button);
+          }
+          row.append(actions);
+        }
+        list.append(row);
+      }
+    }
+  }
+
+  function scheduleSequence() {
+    clearTimeout(sequenceTimer);
+    if (!sequence) return;
+    const plan = sequence.snapshot(batch);
+    if (plan.state === 'waiting') sequenceTimer = setTimeout(async () => {
+      renderSequence(); updateControls();
+      if (sequence?.snapshot(batch).retrySeconds === 0) await submitNextGroup();
+      else scheduleSequence();
+    }, Math.min(1000, Math.max(1, plan.retryAt - Date.now())));
+    else if (plan.expiresAt > Date.now()) sequenceTimer = setTimeout(() => {
+      renderSequence(); scheduleSequence();
+    }, Math.min(60_000, plan.expiresAt - Date.now()));
+  }
+
+  function stopSequence(message) {
+    if (!sequenceActive()) return;
+    sequence.stop(message);
+    sequenceGeneration += 1;
+    renderSequence(); scheduleSequence(); updateControls();
+  }
+
+  function handleExternalClear() {
+    const revision = resultStore.clearRevision?.() || '';
+    if (revision === workspaceRevision) return;
+    // A lock-time read can see the marker before its storage/channel event.
+    // Consume it now so that delayed notification cannot clear a later plan.
+    resultStore.receiveClear?.(revision);
+    workspaceRevision = revision;
+    pollRequest += 1; sequenceGeneration += 1;
+    clearTimeout(pollTimer); clearTimeout(initializeTimer); clearTimeout(sequenceTimer);
+    sequence?.clear(); sequence = null; sequenceArchiveSignature = '';
+    initializing = false; hideRt(); clearActiveJobs(); resetResultCollection();
+    byId('accounts-text').value = ''; byId('accounts-file').value = ''; byId('file-name').textContent = ''; byId('proxy').value = '';
+    updateCount(); render(null); renderSequence();
+    document.dispatchEvent(new CustomEvent('rt:results-cleared'));
+    showError('另一个标签页已清空本会话，本页分组计划与内存归档已清除。请重新导入账号后开始。');
+  }
+
+  function workspaceWasCleared() {
+    if ((resultStore.clearRevision?.() || '') === workspaceRevision) return false;
+    handleExternalClear(); return true;
+  }
+
+  function stopReplacedSequence(cached) {
+    if (!sequenceActive() || !cached || cached.batch.id === (sequence.currentId() || batch?.id)) return false;
+    stopSequence('另一个标签页已切换到新的批次，本页后续分组已停止。已完成分组仍可下载，请核对未处理账号后重新导入。');
+    return true;
+  }
+
+  async function submitNextGroup() {
+    if (!sequenceActive() || submitting || clearing) return;
+    const selected = sequence;
+    const body = selected.take();
+    if (!body) return;
+    const generation = sequenceGeneration;
+    let accepted = null;
+    submitting = true; networkNotice = false; showError(''); updateControls(); renderSequence();
+    try {
+      await withBrowserResultLock(async () => {
+        if (workspaceWasCleared() || stopReplacedSequence(resultStore.read())) return;
+        if (selected !== sequence || generation !== sequenceGeneration) return;
+        accepted = await jsonRequest('/api/batches', { method: 'POST', body: JSON.stringify(body) });
+        if (workspaceWasCleared()) return;
+        if (selected !== sequence || generation !== sequenceGeneration) return;
+        selected.accept(accepted);
+        resultStore.save(accepted);
+      });
+      if (selected !== sequence || generation !== sequenceGeneration || !accepted) return;
+      resetResultCollection(); render(accepted); schedulePoll();
+    } catch (error) {
+      if (selected !== sequence || generation !== sequenceGeneration) return;
+      if (error.status === 429 && !accepted) {
+        selected.wait(error.retryAfter, error.message);
+      } else {
+        stopSequence(accepted
+          ? '本组已提交，但浏览器无法保存接收记录。已停止后续分组，请检查当前任务。'
+          : error.status ? `分组提交失败，已停止后续分组。${error.message}`
+            : '本组提交结果未确认，已停止自动提交。请先检查服务器任务，勿直接重复提交本组。');
+        if (accepted) { resetResultCollection(); render(accepted); schedulePoll(); }
+        showError(error.message, error.errors || []);
+      }
+    } finally {
+      body.accounts_text = ''; body.proxy = '';
+      submitting = false; updateControls(); renderSequence(); scheduleSequence();
+    }
+  }
+
+  async function advanceSequence(current) {
+    if (!sequence || sequence.currentId() !== current?.id || activeStates.has(current.status)) return;
+    if (!isBatchCollected(current.id)) return;
+    sequence.finish(current, resultStore.read(), true);
+    renderSequence(); scheduleSequence(); updateControls();
+    if (sequence.snapshot(batch).state === 'ready') await submitNextGroup();
   }
 
   function updateControls() {
     const active = !!batch && activeStates.has(batch.status);
     const stopping = cancelling || batch?.status === 'cancelling';
-    const busy = active || submitting || confirmingProxy || importing || initializing || clearing || savingSkipSetting;
+    const busy = active || sequenceActive() || submitting || confirmingProxy || importing || initializing || clearing || savingSkipSetting;
     byId('credentials-fields').disabled = busy;
     byId('clear-accounts-button').disabled = busy || (!byId('accounts-text').value && !byId('file-name').textContent);
     const submitRemaining = cooldowns.remaining('submit');
     const cancelRemaining = cooldowns.remaining('cancel');
     byId('start-button').disabled = busy || submitRemaining > 0;
-    byId('start-label').textContent = importing ? '正在读取文件…' : submitting ? '正在提交…' : active ? '批次进行中…' : submitRemaining ? `${submitRemaining} 秒后可重试` : batch ? '开始新批次' : '开始批量提取';
-    byId('cancel-button').hidden = !active;
-    byId('cancel-button').disabled = stopping || savingSkipSetting || cancelRemaining > 0;
-    byId('cancel-button').textContent = stopping ? '正在取消…' : cancelRemaining ? `${cancelRemaining} 秒后可取消` : '取消整批';
+    byId('start-label').textContent = importing ? '正在读取文件…' : submitting ? '正在提交…' : sequenceActive() ? '分组计划进行中…' : active ? '批次进行中…' : submitRemaining ? `${submitRemaining} 秒后可重试` : batch ? '开始新批次' : '开始批量提取';
+    byId('cancel-button').hidden = !active && !sequenceActive();
+    byId('cancel-button').disabled = stopping || submitting || savingSkipSetting || (active && cancelRemaining > 0);
+    byId('cancel-button').textContent = stopping ? '正在取消…' : active && cancelRemaining ? `${cancelRemaining} 秒后可取消` : sequenceActive() ? '停止分组计划' : '取消整批';
     const clear = byId('clear-browser-results');
     if (clear) clear.disabled = clearing || submitting || confirmingProxy || initializing || savingSkipSetting;
     const skipSetting = byId('skip-email-verification');
@@ -133,7 +283,7 @@ import { getBrowserResults, collectBatchResults, isBatchCollected, resetResultCo
 
   function canSubmitBatch() {
     return !submitting && !confirmingProxy && !importing && !initializing && !clearing && !savingSkipSetting
-      && !cooldowns.remaining('submit') && !(batch && activeStates.has(batch.status));
+      && !sequenceActive() && !cooldowns.remaining('submit') && !(batch && activeStates.has(batch.status));
   }
 
   async function confirmProxy() {
@@ -400,6 +550,18 @@ import { getBrowserResults, collectBatchResults, isBatchCollected, resetResultCo
     if (byId('rt-dialog').open) byId('rt-dialog').close();
   }
 
+  function refreshMissingResults(message) {
+    if (resultStore.read()) return false;
+    if (sequenceActive() && sequence.currentId() === batch?.id) stopSequence('当前组结果缓存已丢失，已停止后续分组，避免覆盖尚未完整接收的结果。');
+    hideRt();
+    // Cache loss does not establish whether the server task is still running.
+    const active = activeStates.has(batch?.status);
+    render(active ? batch : null);
+    if (message) showError(message);
+    if (active) schedulePoll(0);
+    return true;
+  }
+
   async function viewRt(account) {
     clearRt();
     rtAccount = { id: account.id, email: account.email };
@@ -408,6 +570,7 @@ import { getBrowserResults, collectBatchResults, isBatchCollected, resetResultCo
     if (!dialog.open) dialog.showModal();
     const record = resultStore.record(account.id);
     if (!record) {
+      if (refreshMissingResults('本浏览器结果缓存已过期或被清除，当前没有可查看的 RT。')) return;
       byId('rt-view-status').textContent = '结果尚未接收到本浏览器，或浏览器缓存已过期。';
       byId('rt-view-status').classList.add('failed');
       return;
@@ -545,27 +708,31 @@ import { getBrowserResults, collectBatchResults, isBatchCollected, resetResultCo
     byId('conversion-status').textContent = downloadable
       ? `${cached.records.length} 个账号已接收到本浏览器，CPA / Sub2API 文件在本地生成。` : '';
     const notice = byId('browser-cache-status');
-    if (notice) notice.textContent = storageStatus.notice || '结果在本浏览器缓存中有效期为 30 分钟；页面运行或下次读取时清理过期缓存。服务器确认交接后即清除临时结果。';
+    if (notice) notice.textContent = !cached && counts.success > 0
+      ? '成功数量是任务处理记录；当前浏览器结果缓存已过期或被清除，暂时没有可下载的结果。'
+      : storageStatus.notice || '结果在本浏览器缓存中有效期为 30 分钟；页面运行或下次读取时清理过期缓存。服务器确认交接后即清除临时结果。';
     const clearButton = byId('clear-browser-results');
     if (clearButton) {
       clearButton.disabled = clearing || submitting || confirmingProxy || initializing || savingSkipSetting;
-      clearButton.textContent = clearing ? '正在清空…' : cleanupRetry ? '重试清理临时任务' : activeStates.has(batch?.status) ? '结束任务并清空' : '清空结果';
+      clearButton.textContent = clearing ? '正在清空…' : cleanupRetry ? '重试清理临时任务' : sequenceActive() ? '停止分组并清空' : activeStates.has(batch?.status) ? '结束任务并清空' : '清空结果';
       clearButton.title = '清空本浏览器缓存并结束本会话的临时任务，其他用户不受影响。';
     }
     clearTimeout(expiryTimer);
     if (cached) expiryTimer = setTimeout(() => {
-      hideRt();
-      if (!resultStore.read() && !activeStates.has(batch?.status)) { render(null); showError('本浏览器缓存已过期并清除。'); }
+      if (!refreshMissingResults('本浏览器结果缓存已过期或被清除，当前没有可下载的结果。')) render(batch);
     }, Math.max(1, cached.expiresAt - Date.now()));
+    renderSequence();
   }
 
   function schedulePoll(delay = 1000) {
     clearTimeout(pollTimer);
-    if (!document.hidden && batch && (activeStates.has(batch.status) || !isBatchCollected(batch.id))) pollTimer = setTimeout(pollBatch, Math.max(delay, cooldowns.delay('poll')));
+    if ((!document.hidden || canPollInBackground()) && batch && (activeStates.has(batch.status) || !isBatchCollected(batch.id))) {
+      pollTimer = setTimeout(pollBatch, Math.max(delay, document.hidden ? 30_000 : 0, cooldowns.delay('poll')));
+    }
   }
 
   async function pollBatch() {
-    if (!batch || pollPending || document.hidden) return;
+    if (!batch || pollPending || (document.hidden && !canPollInBackground())) return;
     if (savingSkipSetting) { schedulePoll(); return; }
     if (cooldowns.remaining('poll')) { schedulePoll(); return; }
     clearTimeout(pollTimer);
@@ -585,6 +752,7 @@ import { getBrowserResults, collectBatchResults, isBatchCollected, resetResultCo
       if (batch?.id === id) {
         render(received || current);
         if (networkNotice) { showError(''); networkNotice = false; }
+        await advanceSequence(received || current);
       }
     } catch (error) {
       if (batch?.id !== id || generation !== pollRequest || clearing) return;
@@ -604,6 +772,7 @@ import { getBrowserResults, collectBatchResults, isBatchCollected, resetResultCo
         }
       }
       if (error.status === 404) {
+        if (sequenceActive() && sequence.currentId() === id) stopSequence('当前组服务器任务已不存在，已停止后续分组。请下载已接收结果，核对未处理账号后重新导入。');
         const cached = resultStore.read();
         const lostActive = activeStates.has(batch.status)
           && (!cached || (cached.batch.id === id && activeStates.has(cached.batch.status)));
@@ -621,6 +790,9 @@ import { getBrowserResults, collectBatchResults, isBatchCollected, resetResultCo
         return;
       }
       networkNotice = true;
+      if (sequenceActive() && (error.status === 403 || (!error.status && /缓存|容量|不匹配/.test(error.message)))) {
+        stopSequence(`当前组结果无法继续同步，已停止后续分组。${error.message}`);
+      }
       showError(error.status === 403 || error.status === 429 ? error.message : `${error.message} 正在重新获取批次状态。`);
       nextDelay = error.status === 429 ? error.retryAfter * 1000 : 3000;
       retry = error.status !== 403;
@@ -632,15 +804,25 @@ import { getBrowserResults, collectBatchResults, isBatchCollected, resetResultCo
 
   function downloadLocal(kind, button, jobId = null) {
     if (button.disabled) return;
+    const cached = resultStore.read();
+    if (!cached) {
+      refreshMissingResults('本浏览器结果缓存已过期或被清除，当前没有可下载的结果。');
+      return;
+    }
+    downloadSnapshot(cached, kind, button, jobId);
+  }
+
+  function downloadSnapshot(cached, kind, button, jobId = null) {
+    if (button.disabled) return;
     button.disabled = true;
     try {
-      const { blob, filename } = resultDownload(resultStore.read(), kind, jobId);
+      const { blob, filename } = resultDownload(cached, kind, jobId);
       const url = URL.createObjectURL(blob);
       const link = document.createElement('a');
       link.href = url; link.download = filename;
       document.body.append(link); link.click(); link.remove();
       setTimeout(() => URL.revokeObjectURL(url), 1000);
-    } catch (error) { showError(error.message); }
+    } catch (error) { render(batch); showError(error.message); }
     finally { button.disabled = false; }
   }
 
@@ -648,6 +830,7 @@ import { getBrowserResults, collectBatchResults, isBatchCollected, resetResultCo
   byId('skip-email-verification').addEventListener('change', async () => {
     const setting = byId('skip-email-verification');
     if (setting.disabled) return;
+    sequence?.setSkip(setting.checked);
     if (!batch || !activeStates.has(batch.status)) { updateControls(); return; }
     const id = batch.id;
     const previous = batch.skip_email_verification === true;
@@ -666,6 +849,7 @@ import { getBrowserResults, collectBatchResults, isBatchCollected, resetResultCo
     } catch (error) {
       if (batch?.id === id && !clearing) {
         setting.checked = previous;
+        sequence?.setSkip(previous);
         showError(error.message);
       }
     } finally {
@@ -711,7 +895,11 @@ import { getBrowserResults, collectBatchResults, isBatchCollected, resetResultCo
       if (generation === rtGeneration && byId('rt-dialog').open) byId('rt-copy-button').disabled = false;
     }
   });
-  window.addEventListener('pagehide', hideRt);
+  window.addEventListener('pagehide', () => {
+    hideRt();
+    stopSequence('已离开此页面，自动分组已停止；未提交的账号需要重新导入。');
+    clearTimeout(sequenceTimer);
+  });
   byId('import-button').addEventListener('click', () => byId('accounts-file').click());
   byId('accounts-file').addEventListener('change', async () => {
     const file = byId('accounts-file').files?.[0];
@@ -738,21 +926,38 @@ import { getBrowserResults, collectBatchResults, isBatchCollected, resetResultCo
     if (!canSubmitBatch()) return;
     const count = inputCount();
     if (!count) { showError('请粘贴账号列表或导入 .txt 文件。'); return; }
-    if (count > maxAccounts) { showError('每批最多 1,000 条账号，请拆分后提交。'); return; }
+    if (new Blob([byId('accounts-text').value]).size > maxFileBytes) { showError('输入超过 2 MiB，请拆分文件后导入。'); return; }
     hideRt();
     showError('');
     if (!(await confirmProxy()) || !canSubmitBatch()) return;
+    if (workspaceWasCleared()) return;
     const body = { accounts_text: byId('accounts-text').value, timeout: 180, concurrency: Number(byId('concurrency').value), skip_email_verification: byId('skip-email-verification').checked === true };
     if (byId('proxy').value.trim()) body.proxy = byId('proxy').value.trim();
+    if (count > maxAccounts) {
+      if (sequence?.hasArchives()) { showError('请先下载并清空已有分组归档，再开始新的分组计划。'); return; }
+      try {
+        const { accounts_text, ...settings } = body;
+        sequence = createBatchQueue(accounts_text, settings);
+        sequenceGeneration += 1; sequenceArchiveSignature = '';
+        byId('accounts-text').value = ''; byId('accounts-file').value = ''; byId('file-name').textContent = '';
+        updateCount(); renderSequence(); await submitNextGroup();
+      } catch (error) { showError(error.message); }
+      finally { body.accounts_text = ''; body.proxy = ''; }
+      return;
+    }
     submitting = true;
+    const generation = sequenceGeneration;
     networkNotice = false;
     showError('');
     updateControls();
     try {
       const accepted = await withBrowserResultLock(async () => {
+        if (workspaceWasCleared() || generation !== sequenceGeneration) return null;
         const value = await jsonRequest('/api/batches', { method: 'POST', body: JSON.stringify(body) });
+        if (workspaceWasCleared() || generation !== sequenceGeneration) return null;
         resultStore.save(value); return value;
       });
+      if (!accepted || generation !== sequenceGeneration) return;
       byId('accounts-text').value = '';
       byId('accounts-file').value = '';
       byId('file-name').textContent = '';
@@ -760,12 +965,14 @@ import { getBrowserResults, collectBatchResults, isBatchCollected, resetResultCo
       resetResultCollection();
       render(accepted);
       schedulePoll();
-    } catch (error) { showError(error.message, error.errors || []); }
+    } catch (error) { if (generation === sequenceGeneration) showError(error.message, error.errors || []); }
     finally { body.accounts_text = ''; submitting = false; updateControls(); }
   });
 
   byId('cancel-button').addEventListener('click', async () => {
-    if (!batch || cancelling || savingSkipSetting || batch.status === 'cancelling') return;
+    if (submitting || cancelling || savingSkipSetting || batch?.status === 'cancelling') return;
+    stopSequence('已停止分组计划，后续账号不会提交；已接收结果仍可按组下载。');
+    if (!batch || !activeStates.has(batch.status)) { updateControls(); return; }
     const id = batch.id;
     cancelling = true;
     updateControls();
@@ -783,12 +990,15 @@ import { getBrowserResults, collectBatchResults, isBatchCollected, resetResultCo
   byId('clear-browser-results')?.addEventListener('click', async () => {
     if (clearing || submitting || confirmingProxy || savingSkipSetting) return;
     clearing = true; clearTimeout(pollTimer); clearTimeout(initializeTimer); pollRequest += 1;
+    sequenceGeneration += 1; clearTimeout(sequenceTimer); sequence?.clear(); sequence = null; sequenceArchiveSignature = '';
+    renderSequence();
     hideRt(); clearActiveJobs(); resetResultCollection(); render(null);
     initializing = false;
     byId('accounts-text').value = ''; byId('proxy').value = ''; updateCount();
     try {
       await withBrowserResultLock(async () => {
         resetResultCollection(); resultStore.clear();
+        workspaceRevision = resultStore.clearRevision?.() || '';
         document.dispatchEvent(new CustomEvent('rt:results-cleared'));
         await jsonRequest('/api/workspace', { method: 'DELETE' });
       });
@@ -830,20 +1040,32 @@ import { getBrowserResults, collectBatchResults, isBatchCollected, resetResultCo
       initializePending = false;
     }
   }
+  document.addEventListener('rt:browser-results-cleared', handleExternalClear);
   document.addEventListener('rt:browser-results', () => {
     hideRt();
-    if (clearing || submitting) return;
+    if (clearing || workspaceWasCleared()) return;
     const cached = resultStore.read();
-    if (!cached) { pollRequest += 1; initializing = false; clearTimeout(pollTimer); resetResultCollection(); render(null); return; }
+    const replaced = stopReplacedSequence(cached);
+    if (submitting && !replaced) return;
+    if (!cached) {
+      pollRequest += 1; initializing = false; clearTimeout(pollTimer); resetResultCollection();
+      refreshMissingResults(batch ? '本浏览器结果缓存已过期或被清除，当前没有可下载的结果。' : '');
+      return;
+    }
     const snapshot = cached.batch;
     if (batch?.id === snapshot.id && activeStates.has(snapshot.status)) snapshot.active_jobs = batch.active_jobs || [];
     render(snapshot); schedulePoll();
   });
   document.addEventListener('visibilitychange', () => {
     if (!document.hidden) {
+      if (workspaceWasCleared()) return;
+      if (batch) {
+        if (!refreshMissingResults('本浏览器结果缓存已过期或被清除，当前没有可下载的结果。')) render(batch);
+      }
       refreshCooldownControls();
       if (initializing) initialize(); else schedulePoll(0);
-    } else clearTimeout(pollTimer);
+    } else if (canPollInBackground()) schedulePoll(30_000);
+    else clearTimeout(pollTimer);
   });
   updateCount();
   const initialCache = resultStore.read();
