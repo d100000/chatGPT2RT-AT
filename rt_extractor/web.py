@@ -89,7 +89,8 @@ def create_app(output_dir: str | Path | None = None, extractor: Callable | None 
         browser = browser_identities.resolve(request.cookies)
         g.abuse_identity = abuse.identity(request.remote_addr, browser.device, browser.session)
         abuse.check_request(g.abuse_identity, control=request.endpoint in {
-            "cancel", "cancel_batch", "ack_batch", "ack_job", "clear_workspace", "pelican_stop", "benchmark_stop"},
+            "cancel", "cancel_batch", "skip_email", "batch_settings", "ack_batch", "ack_job",
+            "clear_workspace", "pelican_stop", "benchmark_stop"},
                             static=request.endpoint == "static")
         try:
             host = urlsplit("http://" + request.host)
@@ -133,6 +134,7 @@ def create_app(output_dir: str | Path | None = None, extractor: Callable | None 
             abuse.check_action(g.abuse_identity, "export")
             g.export_lease = abuse.acquire_export()
         limits = {"start": 16 * 1024, "code": 4 * 1024, "cancel": 1024, "cancel_batch": 1024,
+                  "skip_email": 1024, "batch_settings": 1024,
                   "ack_batch": 96 * 1024, "ack_job": 4 * 1024, "clear_workspace": 1024}
         if endpoint in limits:
             request.max_content_length = limits[endpoint]
@@ -317,6 +319,22 @@ def create_app(output_dir: str | Path | None = None, extractor: Callable | None 
         except KeyError:
             return missing()
 
+    @app.post("/api/jobs/<job_id>/skip")
+    def skip_email(job_id: str):
+        if owned_job(job_id) is None:
+            return missing()
+        payload = request.get_json(silent=True)
+        if (not isinstance(payload, dict) or set(payload) != {"challenge_id"}
+                or not isinstance(payload["challenge_id"], str)
+                or not re.fullmatch(r"[A-Za-z0-9_-]{1,128}", payload["challenge_id"])):
+            return jsonify(error="请提供有效的邮箱验证请求"), 400
+        try:
+            return jsonify(g.workspace.jobs.skip_email(job_id, payload["challenge_id"]))
+        except KeyError:
+            return missing()
+        except ValueError as exc:
+            return jsonify(error=str(exc)), 409
+
     @app.post("/api/batches")
     def start_batch():
         payload = request.get_json(silent=True)
@@ -326,7 +344,9 @@ def create_app(output_dir: str | Path | None = None, extractor: Callable | None 
             return jsonify(error=str(exc), errors=exc.errors), 400
         try:
             result = admit_task((data["email"] for _, data in accounts), lambda workspace:
-                                workspace.batches.start(accounts, concurrency=payload.get("concurrency", DEFAULT_CONCURRENCY)))
+                                workspace.batches.start(
+                                    accounts, concurrency=payload.get("concurrency", DEFAULT_CONCURRENCY),
+                                    skip_email_verification=payload.get("skip_email_verification", False)))
             return jsonify(result), 202
         except AbuseLimited:
             clear_accounts(accounts)
@@ -355,6 +375,21 @@ def create_app(output_dir: str | Path | None = None, extractor: Callable | None 
             return jsonify(g.workspace.batches.cancel(batch_id))
         except KeyError:
             return missing("批次")
+
+    @app.post("/api/batches/<batch_id>/settings")
+    def batch_settings(batch_id: str):
+        if owned_batch(batch_id) is None:
+            return missing("批次")
+        payload = request.get_json(silent=True)
+        if (not isinstance(payload, dict) or set(payload) != {"skip_email_verification"}
+                or type(payload["skip_email_verification"]) is not bool):
+            return jsonify(error="请提供有效的跳过邮箱验证开关"), 400
+        try:
+            return jsonify(g.workspace.batches.update_settings(batch_id, **payload))
+        except KeyError:
+            return missing("批次")
+        except ValueError as exc:
+            return jsonify(error=str(exc)), 409
 
     def handoff_record(job):
         return {"id": job.id, "line": job.line, "email": job.email, **job.payload}

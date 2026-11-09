@@ -61,6 +61,8 @@ class Job:
     task: Any = field(default=None, repr=False)
     code_future: Any = field(default=None, repr=False)
     cancel_requested: bool = False
+    skip_email_verification: bool = False
+    skip_requested: bool = False
     retry_after: int | None = field(default=None, repr=False)
     payload: dict | None = field(default=None, repr=False)
     payload_bytes: int = field(default=0, repr=False)
@@ -125,7 +127,11 @@ class JobManager:
         loop = asyncio.get_running_loop()
         future = loop.create_future()
         with self.lock:
-            if job.cancel_requested:
+            if job.cancel_requested or job.skip_requested:
+                raise asyncio.CancelledError
+            if kind == "email" and job.skip_email_verification:
+                job.skip_requested = True
+                self._event(job, "skipping", "遇到邮箱验证，正在跳过该账号")
                 raise asyncio.CancelledError
             job.status = "awaiting_code"
             job.challenge = {"id": secrets.token_urlsafe(16), "kind": kind}
@@ -144,7 +150,7 @@ class JobManager:
     def submit_code(self, job_id: str, challenge_id: str, code: str) -> dict:
         with self.lock:
             job = self.jobs[job_id]
-            if (job.cancel_requested or job.status != "awaiting_code" or not job.challenge
+            if (job.cancel_requested or job.skip_requested or job.status != "awaiting_code" or not job.challenge
                     or not hmac.compare_digest(job.challenge["id"].encode(), challenge_id.encode())
                     or job.code_future is None):
                 raise ValueError("当前验证码请求已失效，请等待新的验证提示")
@@ -159,6 +165,38 @@ class JobManager:
 
             job.loop.call_soon_threadsafe(deliver)
             return job.snapshot()
+
+    def skip_email(self, job_id: str, challenge_id: str) -> dict:
+        """Consume the current email challenge and stop the account, not its batch."""
+        with self.lock:
+            job = self.jobs[job_id]
+            if (job.cancel_requested or job.skip_requested or job.status != "awaiting_code"
+                    or not job.challenge or job.challenge["kind"] != "email"
+                    or not hmac.compare_digest(job.challenge["id"].encode(), challenge_id.encode())
+                    or job.code_future is None or job.code_future.done()
+                    or job.loop is None or job.loop.is_closed() or job.task is None):
+                raise ValueError("当前邮箱验证请求已失效，或该账号无需邮箱验证")
+            job.skip_requested = True
+            job.challenge = None
+            job.status = "running"
+            self._event(job, "skipping", "正在跳过该账号并释放处理名额")
+            try:
+                job.loop.call_soon_threadsafe(job.task.cancel)
+            except RuntimeError:
+                # The worker can finish timeout cleanup just before loop closure.
+                # Its terminal handler still observes skip_requested under this lock.
+                pass
+            return job.snapshot()
+
+    def _finish_stopped(self, job: Job) -> None:
+        """Cancellation wins when a batch is stopped during skip cleanup."""
+        job.error = None
+        if job.skip_requested and not job.cancel_requested:
+            job.status = "skipped"
+            self._event(job, "skipped", "已跳过邮箱验证，该账号未提取 Token")
+        else:
+            job.status = "cancelled"
+            self._event(job, "cancelled", "任务已取消")
 
     def cancel(self, job_id: str) -> dict:
         with self.lock:
@@ -180,13 +218,13 @@ class JobManager:
             with self.lock:
                 job.loop = asyncio.get_running_loop()
                 job.task = asyncio.current_task()
-                if job.cancel_requested:
+                if job.cancel_requested or job.skip_requested:
                     raise asyncio.CancelledError
                 job.status = "running"
 
             def progress(stage: str, message: str) -> None:
                 with self.lock:
-                    if not job.cancel_requested:
+                    if not job.cancel_requested and not job.skip_requested:
                         self._event(job, stage, message)
 
             async def totp() -> str:
@@ -200,7 +238,7 @@ class JobManager:
                 kwargs["totp_fetcher"] = totp
             result = await self.extractor(**kwargs)
             with self.lock:
-                if job.cancel_requested:
+                if job.cancel_requested or job.skip_requested:
                     raise asyncio.CancelledError
                 if self.ephemeral:
                     raw = result.to_dict()
@@ -262,19 +300,21 @@ class JobManager:
             asyncio.run(execute())
         except asyncio.CancelledError:
             with self.lock:
-                job.status = "cancelled"
-                self._event(job, "cancelled", "任务已取消")
+                self._finish_stopped(job)
         except Exception as exc:
             # These classes contain deliberately safe messages in our extractor.
             message = str(exc) if isinstance(exc, (ExtractionError, ProtocolError)) else "任务失败，请检查网络连接和账号验证状态"
             with self.lock:
-                job.status = "error"
-                job.error = message
-                if isinstance(exc, RateLimitedError):
-                    job.retry_after = exc.retry_after
-                    if on_rate_limit is not None:
-                        on_rate_limit(exc.retry_after)
-                self._event(job, "error", message)
+                if job.cancel_requested or job.skip_requested:
+                    self._finish_stopped(job)
+                else:
+                    job.status = "error"
+                    job.error = message
+                    if isinstance(exc, RateLimitedError):
+                        job.retry_after = exc.retry_after
+                        if on_rate_limit is not None:
+                            on_rate_limit(exc.retry_after)
+                    self._event(job, "error", message)
         finally:
             if acquired:
                 self.worker_slots.release()

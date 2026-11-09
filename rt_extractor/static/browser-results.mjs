@@ -18,9 +18,12 @@ function clean(value) {
 function safeBatch(batch) {
   if (!batch || typeof batch.id !== 'string' || !Array.isArray(batch.rows) || batch.rows.length > 1000
       || !batch.counts || !['total', 'success', 'error', 'cancelled', 'queued', 'running'].every((key) => Number.isInteger(batch.counts[key]) && batch.counts[key] >= 0)
+      || (batch.counts.skipped !== undefined && (!Number.isInteger(batch.counts.skipped) || batch.counts.skipped < 0))
       || !batch.rows.every((row) => row && typeof row.id === 'string' && typeof row.email === 'string' && typeof row.status === 'string')) return null;
   const fields = ['id', 'status', 'concurrency', 'counts', 'cooldown_seconds', 'error'];
   const result = Object.fromEntries(fields.filter((field) => batch[field] !== undefined).map((field) => [field, clean(batch[field])]));
+  result.skip_email_verification = batch.skip_email_verification === true;
+  result.counts.skipped ??= 0;
   const rowFields = ['id', 'line', 'email', 'status', 'stage', 'message', 'error'];
   result.rows = batch.rows.map((row) => Object.fromEntries(rowFields.filter((field) => row[field] !== undefined).map((field) => [field, row[field]])));
   // Verification challenges and progress logs stay transient.
@@ -108,13 +111,13 @@ export function createBrowserResultStore({ owner, storage, now = Date.now, maxBy
         let preserved = false;
         normalized.rows = normalized.rows.map((row) => {
           const old = previousRows.get(row.id);
-          if (old && ['success', 'error', 'cancelled'].includes(old.status) && old.status !== row.status) {
+          if (old && ['success', 'error', 'cancelled', 'skipped'].includes(old.status) && old.status !== row.status) {
             preserved = true; return old;
           }
           return row;
         });
         if (preserved) {
-          normalized.counts = { total: normalized.rows.length, queued: 0, running: 0, awaiting_code: 0, success: 0, error: 0, cancelled: 0 };
+          normalized.counts = { total: normalized.rows.length, queued: 0, running: 0, awaiting_code: 0, success: 0, error: 0, cancelled: 0, skipped: 0 };
           for (const row of normalized.rows) if (Object.hasOwn(normalized.counts, row.status)) normalized.counts[row.status]++;
         }
       }

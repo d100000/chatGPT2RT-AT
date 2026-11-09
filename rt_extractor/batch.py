@@ -25,7 +25,7 @@ MAX_CONCURRENCY = 3
 _CONVERSION_ERROR = "批量 CPA / Sub2API 自动生成失败；单账号文件已保留，可重试下载或检查输出目录权限"
 _ID = re.compile(r"[0-9a-f]{32}")
 _TERMINAL_BATCH = {"completed", "cancelled"}
-_TERMINAL_JOB = {"success", "error", "cancelled"}
+_TERMINAL_JOB = {"success", "error", "cancelled", "skipped"}
 
 
 class BatchInputError(ValueError):
@@ -40,12 +40,21 @@ def validate_concurrency(value: Any) -> int:
     return value
 
 
+def validate_skip_email_verification(value: Any) -> bool:
+    if type(value) is not bool:
+        raise ValueError("跳过邮箱验证开关须为布尔值")
+    return value
+
+
 def parse_accounts(payload: Any) -> list[tuple[int, dict]]:
     """Parse email----password----TOTP; never include input lines in errors."""
-    if not isinstance(payload, dict) or set(payload) - {"accounts_text", "proxy", "timeout", "concurrency"}:
+    if not isinstance(payload, dict) or set(payload) - {
+        "accounts_text", "proxy", "timeout", "concurrency", "skip_email_verification",
+    }:
         raise BatchInputError([{"line": 0, "message": "请求格式无效"}])
     try:
         validate_concurrency(payload.get("concurrency", DEFAULT_CONCURRENCY))
+        validate_skip_email_verification(payload.get("skip_email_verification", False))
     except ValueError as exc:
         raise BatchInputError([{"line": 0, "message": str(exc)}]) from None
     text = payload.get("accounts_text")
@@ -100,6 +109,7 @@ class Batch:
     directory: Path | None
     rows: list[Job]
     concurrency: int = DEFAULT_CONCURRENCY
+    skip_email_verification: bool = False
     status: str = "queued"
     current: Job | None = None
     cancel_requested: bool = False
@@ -114,7 +124,7 @@ class Batch:
 
     def snapshot(self) -> dict:
         counts = {"total": len(self.rows), "queued": 0, "running": 0, "awaiting_code": 0,
-                  "success": 0, "error": 0, "cancelled": 0}
+                  "success": 0, "error": 0, "cancelled": 0, "skipped": 0}
         for job in self.rows:
             counts[job.status] += 1
         active = [job for job in self.rows if job.status in {"running", "awaiting_code"}]
@@ -144,6 +154,7 @@ class Batch:
             }
         return {
             "id": self.id, "status": status, "concurrency": self.concurrency, "counts": counts,
+            "skip_email_verification": self.skip_email_verification,
             "cooldown_seconds": max(0, math.ceil(self.dispatch_not_before - time.monotonic()))
                 if counts["queued"] and status not in _TERMINAL_BATCH else 0,
             "rows": [{key: value for key, value in job.snapshot().items()
@@ -256,6 +267,7 @@ class BatchManager:
         return Batch(
             id=state["id"], directory=directory, rows=rows, status=state["status"],
             concurrency=validate_concurrency(state.get("concurrency", 1)),
+            skip_email_verification=validate_skip_email_verification(state.get("skip_email_verification", False)),
             cancel_requested=state["status"] == "cancelled",
             error=optional_text(state.get("error")),
             conversion_status=conversion_status,
@@ -288,8 +300,10 @@ class BatchManager:
             batch = self.batches.get(batch_id or self.current_id)
             return batch.snapshot() if batch else None
 
-    def start(self, accounts: list[tuple[int, dict]], *, concurrency: int = DEFAULT_CONCURRENCY) -> dict:
+    def start(self, accounts: list[tuple[int, dict]], *, concurrency: int = DEFAULT_CONCURRENCY,
+              skip_email_verification: bool = False) -> dict:
         concurrency = validate_concurrency(concurrency)
+        skip_email_verification = validate_skip_email_verification(skip_email_verification)
         with self.lock:
             if self.jobs.active_batch or any(job.status in ACTIVE for job in self.jobs.jobs.values()):
                 raise ValueError("已有任务进行中，请先完成或取消当前任务")
@@ -298,8 +312,10 @@ class BatchManager:
             if directory is not None:
                 directory.mkdir(mode=0o700)
             rows = [Job(id=uuid.uuid4().hex, email=data["email"], line=line,
-                        batch_id=batch_id, output_dir=directory) for line, data in accounts]
+                        batch_id=batch_id, output_dir=directory,
+                        skip_email_verification=skip_email_verification) for line, data in accounts]
             batch = Batch(id=batch_id, directory=directory, rows=rows, concurrency=concurrency,
+                          skip_email_verification=skip_email_verification,
                           credential_records=[data for _, data in accounts])
             while len(self.batches) >= 3:
                 old = self.batches.pop(next(iter(self.batches)))
@@ -322,6 +338,25 @@ class BatchManager:
                     credentials.clear()
                 accounts.clear()
                 raise
+            return batch.snapshot()
+
+    def update_settings(self, batch_id: str, *, skip_email_verification: bool) -> dict:
+        enabled = validate_skip_email_verification(skip_email_verification)
+        with self.lock:
+            batch = self.batches[batch_id]
+            if batch.status not in {"queued", "running"} or batch.cancel_requested:
+                raise ValueError("批次已结束或正在取消，无法修改设置")
+            batch.skip_email_verification = enabled
+            for row in batch.rows:
+                row.skip_email_verification = enabled
+                if (enabled and row.status == "awaiting_code" and row.challenge
+                        and row.challenge["kind"] == "email"):
+                    try:
+                        self.jobs.skip_email(row.id, row.challenge["id"])
+                    except ValueError:
+                        # A timeout may have already completed its future while
+                        # its cleanup is waiting to reacquire the manager lock.
+                        pass
             return batch.snapshot()
 
     def _cancel_remaining(self, batch: Batch) -> None:

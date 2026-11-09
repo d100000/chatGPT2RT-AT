@@ -208,3 +208,81 @@ test('a second tab stale running snapshot cannot regress delivered success rows 
     assert.equal(store.read().batch.counts.success, 1); assert.equal(store.record(record().id).raw.refresh_token, 'synthetic-rt-1');
   }
 });
+
+test('email verification preference survives browser cache restore with a safe legacy default', () => {
+  const storage = storageMock(), store = createBrowserResultStore({ owner, storage });
+  for (const setting of [true, false, undefined, 'true']) {
+    const value = batch();
+    if (setting !== undefined) value.skip_email_verification = setting;
+    store.save(value, [record()]);
+    const restored = createBrowserResultStore({ owner, storage }).read();
+    assert.equal(restored.batch.skip_email_verification, setting === true);
+    assert.equal(restored.batch.counts.skipped, 0);
+  }
+});
+
+test('late cross-tab snapshots preserve skipped rows and rebuild their separate completion count', () => {
+  const storage = storageMock(), first = createBrowserResultStore({ owner, storage }), second = createBrowserResultStore({ owner, storage });
+  const old = batch([], 'running');
+  old.counts = { total: 2, success: 0, error: 0, cancelled: 0, queued: 1, running: 0, awaiting_code: 1 };
+  old.rows = [
+    { id: 'c'.repeat(32), line: 1, email: 'skip@example.com', status: 'awaiting_code' },
+    { id: 'd'.repeat(32), line: 2, email: 'next@example.com', status: 'queued' },
+  ];
+  first.save(old);
+  const newer = structuredClone(old);
+  newer.rows[0] = { ...newer.rows[0], status: 'skipped', message: '已跳过需要邮箱验证的账号' };
+  newer.counts.awaiting_code = 0;
+  newer.counts.skipped = 1;
+  first.save(newer);
+  second.save(old);
+  for (const store of [first, second, createBrowserResultStore({ owner, storage })]) {
+    const restored = store.read();
+    assert.equal(restored.batch.rows[0].status, 'skipped');
+    assert.equal(restored.batch.rows[0].message, '已跳过需要邮箱验证的账号');
+    assert.deepEqual(restored.batch.counts, { total: 2, queued: 1, running: 0, awaiting_code: 0, success: 0, error: 0, cancelled: 0, skipped: 1 });
+    assert.equal(restored.records.length, 0);
+  }
+});
+
+test('server expiry cancels only unfinished rows and retains skipped accounts and preference', () => {
+  const store = createBrowserResultStore({ owner, storage: storageMock() });
+  const value = batch([record()], 'running');
+  value.skip_email_verification = true;
+  value.counts = { total: 3, success: 1, error: 0, cancelled: 0, queued: 0, running: 1, awaiting_code: 0, skipped: 1 };
+  value.rows.push(
+    { id: 'c'.repeat(32), line: 2, email: 'skip@example.com', status: 'skipped' },
+    { id: 'd'.repeat(32), line: 3, email: 'pending@example.com', status: 'running' },
+  );
+  store.save(value, [record()]);
+  const restored = cachedBatchWithoutServer(store);
+  assert.equal(restored.status, 'cancelled');
+  assert.equal(restored.skip_email_verification, true);
+  assert.equal(restored.counts.skipped, 1);
+  assert.equal(restored.counts.cancelled, 1);
+  assert.equal(restored.counts.error, 0);
+  assert.deepEqual(restored.rows.map((row) => row.status), ['success', 'skipped', 'cancelled']);
+  assert.equal(store.read().records.length, 1);
+});
+
+test('an entirely skipped batch completes handoff without producing downloadable Tokens', async () => {
+  const store = createBrowserResultStore({ owner, storage: storageMock() });
+  const collector = createResultCollector({ store });
+  const value = batch([]);
+  value.skip_email_verification = true;
+  value.counts.total = 1;
+  value.counts.skipped = 1;
+  value.rows = [{ id: 'c'.repeat(32), line: 1, email: 'skip@example.com', status: 'skipped' }];
+  const calls = [];
+  await collector.collect(value, async (path, options) => {
+    calls.push(path);
+    if (path.endsWith('/results')) return { batch: value, records: [] };
+    assert.deepEqual(JSON.parse(options.body), { ids: [], complete: true });
+    return {};
+  });
+  assert.equal(calls.length, 2);
+  assert.equal(store.read().collected, true);
+  assert.equal(store.read().batch.counts.skipped, 1);
+  assert.equal(store.read().records.length, 0);
+  assert.throws(() => resultDownload(store.read(), 'rt'), /尚未接收到/);
+});

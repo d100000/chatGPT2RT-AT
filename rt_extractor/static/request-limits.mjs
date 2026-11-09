@@ -42,7 +42,7 @@ export function createRequestCooldowns({ now = Date.now } = {}) {
 }
 
 export function requestLimitAction(path, method = 'GET') {
-  if (/\/cancel$/.test(path) || (path === '/api/workspace' && method.toUpperCase() === 'DELETE')) return 'cancel';
+  if (/\/(?:cancel|skip|settings)$/.test(path) || (path === '/api/workspace' && method.toUpperCase() === 'DELETE')) return 'cancel';
   if (method.toUpperCase() === 'POST' && /^\/api\/(?:jobs|batches)$/.test(path)) return 'submit';
   if (/\/ack$/.test(path)) return 'handoff-ack';
   if (/\/code$/.test(path)) return 'code';

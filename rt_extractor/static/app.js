@@ -7,7 +7,7 @@ import { getBrowserResults, collectBatchResults, isBatchCollected, resetResultCo
   const csrf = document.querySelector('meta[name="rt-csrf"]').content;
   const activeStates = new Set(['queued', 'running', 'awaiting_code', 'cancelling']);
   const batchLabels = { queued: '等待启动', running: '批量提取中', awaiting_code: '等待验证码', cancelling: '正在取消', completed: '处理完成', cancelled: '已取消' };
-  const rowLabels = { queued: '待处理', running: '提取中', awaiting_code: '等待验证', success: '成功', error: '失败', cancelled: '已取消' };
+  const rowLabels = { queued: '待处理', running: '提取中', awaiting_code: '等待验证', success: '成功', error: '失败', skipped: '已跳过', cancelled: '已取消' };
   const maxAccounts = 1000;
   const maxFileBytes = 2 * 1024 * 1024;
   let batch = null;
@@ -16,6 +16,7 @@ import { getBrowserResults, collectBatchResults, isBatchCollected, resetResultCo
   let confirmingProxy = false;
   let importing = false;
   let cancelling = false;
+  let savingSkipSetting = false;
   let pollTimer = null;
   let pollRequest = 0;
   let pollPending = false;
@@ -109,7 +110,7 @@ import { getBrowserResults, collectBatchResults, isBatchCollected, resetResultCo
   function updateControls() {
     const active = !!batch && activeStates.has(batch.status);
     const stopping = cancelling || batch?.status === 'cancelling';
-    const busy = active || submitting || confirmingProxy || importing || initializing || clearing;
+    const busy = active || submitting || confirmingProxy || importing || initializing || clearing || savingSkipSetting;
     byId('credentials-fields').disabled = busy;
     byId('clear-accounts-button').disabled = busy || (!byId('accounts-text').value && !byId('file-name').textContent);
     const submitRemaining = cooldowns.remaining('submit');
@@ -117,15 +118,21 @@ import { getBrowserResults, collectBatchResults, isBatchCollected, resetResultCo
     byId('start-button').disabled = busy || submitRemaining > 0;
     byId('start-label').textContent = importing ? '正在读取文件…' : submitting ? '正在提交…' : active ? '批次进行中…' : submitRemaining ? `${submitRemaining} 秒后可重试` : batch ? '开始新批次' : '开始批量提取';
     byId('cancel-button').hidden = !active;
-    byId('cancel-button').disabled = stopping || cancelRemaining > 0;
+    byId('cancel-button').disabled = stopping || savingSkipSetting || cancelRemaining > 0;
     byId('cancel-button').textContent = stopping ? '正在取消…' : cancelRemaining ? `${cancelRemaining} 秒后可取消` : '取消整批';
     const clear = byId('clear-browser-results');
-    if (clear) clear.disabled = clearing || submitting || confirmingProxy || initializing;
+    if (clear) clear.disabled = clearing || submitting || confirmingProxy || initializing || savingSkipSetting;
+    const skipSetting = byId('skip-email-verification');
+    skipSetting.disabled = submitting || confirmingProxy || initializing || clearing || stopping || savingSkipSetting || (active && cancelRemaining > 0);
+    byId('skip-email-help').textContent = savingSkipSetting ? '正在保存设置…'
+      : active && cancelRemaining ? `${cancelRemaining} 秒后可更改设置。开启后也会跳过当前等待邮箱验证的账号。`
+      : skipSetting.checked ? '已开启：需要邮箱验证码的账号会标记为已跳过，继续下一个，不生成 Token。'
+      : '开启后跳过需要邮箱验证码的账号，继续处理下一个；当前等待中的账号也会跳过。';
     for (const entry of activeEntries.values()) updateCodeControls(entry);
   }
 
   function canSubmitBatch() {
-    return !submitting && !confirmingProxy && !importing && !initializing && !clearing
+    return !submitting && !confirmingProxy && !importing && !initializing && !clearing && !savingSkipSetting
       && !cooldowns.remaining('submit') && !(batch && activeStates.has(batch.status));
   }
 
@@ -164,11 +171,14 @@ import { getBrowserResults, collectBatchResults, isBatchCollected, resetResultCo
   }
 
   function updateCodeControls(entry) {
-    const disabled = entry.submitting || cancelling || batch?.status === 'cancelling' || !entry.challengeId;
+    const disabled = entry.submitting || entry.skipping || savingSkipSetting || clearing || cancelling || batch?.status === 'cancelling' || !entry.challengeId;
     const remaining = cooldowns.remaining('code');
     entry.input.disabled = disabled;
     entry.button.disabled = disabled || remaining > 0;
     entry.button.textContent = entry.submitting ? '验证中…' : remaining ? `${remaining} 秒后验证` : '验证';
+    const skipRemaining = cooldowns.remaining('cancel');
+    entry.skipButton.disabled = disabled || skipRemaining > 0 || entry.job.challenge?.kind !== 'email';
+    entry.skipButton.textContent = entry.skipping ? '正在跳过…' : skipRemaining ? `${skipRemaining} 秒后可跳过` : '跳过此账号';
   }
 
   function clearActiveJobs() {
@@ -215,11 +225,23 @@ import { getBrowserResults, collectBatchResults, isBatchCollected, resetResultCo
     const row = document.createElement('div');
     row.className = 'code-row';
     row.append(input, button);
+    const skipActions = document.createElement('div');
+    skipActions.className = 'challenge-actions';
+    skipActions.hidden = true;
+    const skipButton = document.createElement('button');
+    skipButton.type = 'button';
+    skipButton.className = 'button button-secondary skip-email-button';
+    skipButton.textContent = '跳过此账号';
+    skipButton.setAttribute('aria-label', `跳过 ${job.email}，继续下一个账号`);
+    const skipHelp = document.createElement('p');
+    skipHelp.className = 'field-help';
+    skipHelp.textContent = '结束此账号的提取，继续下一个。';
+    skipActions.append(skipButton, skipHelp);
     const error = document.createElement('p');
     error.className = 'code-error';
     error.setAttribute('role', 'alert');
     error.hidden = true;
-    form.append(title, description, label, row, error);
+    form.append(title, description, label, row, skipActions, error);
     const details = document.createElement('details');
     details.className = 'progress-details';
     const summary = document.createElement('summary');
@@ -229,10 +251,10 @@ import { getBrowserResults, collectBatchResults, isBatchCollected, resetResultCo
     events.setAttribute('aria-label', `${job.email} 的运行记录`);
     details.append(summary, events);
     section.append(heading, message, form, details);
-    const entry = { section, email, badge, message, form, title, description, input, button, error, events, job, challengeId: null, submitting: false, eventsSignature: '' };
+    const entry = { section, email, badge, message, form, title, description, input, button, skipButton, skipActions, error, events, job, challengeId: null, submitting: false, skipping: false, eventsSignature: '' };
     form.addEventListener('submit', async (event) => {
       event.preventDefault();
-      if (entry.submitting || cancelling || batch?.status === 'cancelling' || !entry.challengeId || cooldowns.remaining('code')) return;
+      if (entry.submitting || entry.skipping || savingSkipSetting || clearing || cancelling || batch?.status === 'cancelling' || !entry.challengeId || cooldowns.remaining('code')) return;
       const code = input.value.trim();
       if (!/^[0-9]{6}$/.test(code)) {
         error.textContent = '请输入 6 位数字验证码。';
@@ -255,6 +277,34 @@ import { getBrowserResults, collectBatchResults, isBatchCollected, resetResultCo
         }
       } finally {
         entry.submitting = false;
+        if (activeEntries.get(job.id) === entry) updateCodeControls(entry);
+      }
+    });
+    skipButton.addEventListener('click', async () => {
+      if (skipButton.disabled || entry.job.challenge?.kind !== 'email' || !entry.challengeId) return;
+      const batchId = batch?.id;
+      const challengeId = entry.challengeId;
+      entry.skipping = true;
+      error.hidden = true;
+      updateCodeControls(entry);
+      try {
+        const skipped = await jsonRequest(`/api/jobs/${encodeURIComponent(job.id)}/skip`, { method: 'POST', body: JSON.stringify({ challenge_id: challengeId }) });
+        if (batch?.id === batchId && !clearing) {
+          pollRequest += 1;
+          input.value = '';
+          // Consume the challenge immediately; polling will update final counts after cleanup.
+          batch.active_jobs = batch.active_jobs.map((current) => current.id === job.id ? skipped : current);
+          renderActiveJobs(batch.active_jobs);
+          schedulePoll(0);
+        }
+      } catch (failure) {
+        if (activeEntries.get(job.id) === entry && entry.challengeId === challengeId) {
+          error.textContent = failure.message;
+          error.hidden = false;
+          if (failure.status === 409) schedulePoll(0);
+        }
+      } finally {
+        entry.skipping = false;
         if (activeEntries.get(job.id) === entry) updateCodeControls(entry);
       }
     });
@@ -292,6 +342,7 @@ import { getBrowserResults, collectBatchResults, isBatchCollected, resetResultCo
         entry.error.hidden = true;
       }
       entry.form.hidden = !challenge;
+      entry.skipActions.hidden = challenge?.kind !== 'email';
       if (challenge) {
         const emailChallenge = challenge.kind === 'email';
         entry.title.textContent = emailChallenge ? '需要邮箱验证码' : '需要 Authenticator 动态码';
@@ -441,27 +492,33 @@ import { getBrowserResults, collectBatchResults, isBatchCollected, resetResultCo
   }
 
   function render(currentBatch) {
-    if (batch?.id !== currentBatch?.id) {
+    const changedBatch = batch?.id !== currentBatch?.id;
+    if (changedBatch) {
       hideRt();
       clearActiveJobs();
       if (currentBatch && activeStates.has(currentBatch.status)) byId('concurrency').value = String(currentBatch.concurrency || 2);
     }
     batch = currentBatch;
+    if (batch && !savingSkipSetting && (changedBatch || activeStates.has(batch.status))) {
+      byId('skip-email-verification').checked = batch.skip_email_verification === true;
+    }
     document.dispatchEvent(new CustomEvent('rt:batch', { detail: batch }));
     updateControls();
     const counts = batch?.counts || { total: 0, queued: 0, running: 0, awaiting_code: 0, success: 0, error: 0, cancelled: 0 };
-    const completed = counts.success + counts.error + counts.cancelled;
+    const skipped = counts.skipped || 0;
+    const completed = counts.success + counts.error + counts.cancelled + skipped;
     byId('count-total').textContent = counts.total.toLocaleString('zh-CN');
     byId('count-success').textContent = counts.success.toLocaleString('zh-CN');
     byId('count-error').textContent = counts.error.toLocaleString('zh-CN');
+    byId('count-skipped').textContent = skipped.toLocaleString('zh-CN');
     byId('count-pending').textContent = (counts.queued + counts.running + (counts.awaiting_code || 0)).toLocaleString('zh-CN');
     byId('count-progress').textContent = `${completed} / ${counts.total}`;
     byId('batch-progress').max = counts.total || 1;
     byId('batch-progress').value = completed;
     let summary = '等待导入账号';
     if (batch) {
-      if (batch.status === 'completed') summary = `处理完成：${counts.success} 条成功，${counts.error} 条失败`;
-      else if (batch.status === 'cancelled') summary = `已取消：保留 ${counts.success} 条成功结果，${counts.cancelled} 条未完成`;
+      if (batch.status === 'completed') summary = `处理完成：${counts.success} 条成功，${counts.error} 条失败，${skipped} 条跳过`;
+      else if (batch.status === 'cancelled') summary = `已取消：保留 ${counts.success} 条成功结果，${counts.cancelled} 条未完成，${skipped} 条跳过`;
       else if (batch.status === 'cancelling') summary = '正在停止所有运行中的账号，已成功结果会保留';
       else if (batch.cooldown_seconds > 0) summary = `服务限流，暂停启动新账号，约 ${batch.cooldown_seconds} 秒后继续`;
       else summary = `正在提取 ${counts.running} 个 · 等待验证 ${counts.awaiting_code || 0} 个 · 排队 ${counts.queued} 个`;
@@ -470,7 +527,7 @@ import { getBrowserResults, collectBatchResults, isBatchCollected, resetResultCo
     const badge = byId('batch-badge');
     badge.textContent = batch ? batchLabels[batch.status] || '处理中' : '待开始';
     badge.className = `job-badge ${batch ? badgeClass(batch.status) : ''}`;
-    if (batch?.status === 'completed') badge.classList.add(counts.error ? 'waiting' : 'success');
+    if (batch?.status === 'completed') badge.classList.add(counts.error || skipped ? 'waiting' : 'success');
     byId('empty-state').hidden = !!batch;
     byId('results-panel').hidden = !batch;
     renderRows(batch?.rows || []);
@@ -491,7 +548,7 @@ import { getBrowserResults, collectBatchResults, isBatchCollected, resetResultCo
     if (notice) notice.textContent = storageStatus.notice || '结果在本浏览器缓存中有效期为 30 分钟；页面运行或下次读取时清理过期缓存。服务器确认交接后即清除临时结果。';
     const clearButton = byId('clear-browser-results');
     if (clearButton) {
-      clearButton.disabled = clearing || submitting || confirmingProxy || initializing;
+      clearButton.disabled = clearing || submitting || confirmingProxy || initializing || savingSkipSetting;
       clearButton.textContent = clearing ? '正在清空…' : cleanupRetry ? '重试清理临时任务' : activeStates.has(batch?.status) ? '结束任务并清空' : '清空结果';
       clearButton.title = '清空本浏览器缓存并结束本会话的临时任务，其他用户不受影响。';
     }
@@ -509,17 +566,20 @@ import { getBrowserResults, collectBatchResults, isBatchCollected, resetResultCo
 
   async function pollBatch() {
     if (!batch || pollPending || document.hidden) return;
+    if (savingSkipSetting) { schedulePoll(); return; }
     if (cooldowns.remaining('poll')) { schedulePoll(); return; }
     clearTimeout(pollTimer);
     pollPending = true;
     let nextDelay = 1000;
     let retry = true;
+    let collectingResults = false;
     const id = batch.id;
     const generation = ++pollRequest;
     try {
       const current = activeStates.has(batch.status)
         ? await jsonRequest(`/api/batches/${encodeURIComponent(id)}`) : batch;
       if (batch?.id !== id || generation !== pollRequest || clearing) return;
+      collectingResults = true;
       const received = await collectBatchResults(current, jsonRequest);
       if (batch?.id !== id || generation !== pollRequest) return;
       if (batch?.id === id) {
@@ -527,10 +587,38 @@ import { getBrowserResults, collectBatchResults, isBatchCollected, resetResultCo
         if (networkNotice) { showError(''); networkNotice = false; }
       }
     } catch (error) {
-      if (batch?.id !== id || generation !== pollRequest) return;
+      if (batch?.id !== id || generation !== pollRequest || clearing) return;
+      if (error.status === 404 && collectingResults) {
+        // A failed result handoff does not prove the live task has disappeared.
+        try {
+          const current = await jsonRequest(`/api/batches/${encodeURIComponent(id)}`);
+          if (batch?.id !== id || generation !== pollRequest || clearing) return;
+          render(current);
+          networkNotice = true;
+          showError('账号进度已更新，但结果暂未同步，正在重试。');
+          nextDelay = 3000;
+          return;
+        } catch (failure) {
+          if (batch?.id !== id || generation !== pollRequest || clearing) return;
+          error = failure;
+        }
+      }
       if (error.status === 404) {
         const cached = resultStore.read();
-        if (cached?.batch.id === id) { render(cached.batch); retry = false; return; }
+        const lostActive = activeStates.has(batch.status)
+          && (!cached || (cached.batch.id === id && activeStates.has(cached.batch.status)));
+        const recovered = cachedBatchWithoutServer(resultStore, id);
+        if (recovered?.id === id && !activeStates.has(recovered.status)) resultStore.markCollected(id);
+        resetResultCollection();
+        render(recovered);
+        networkNotice = false;
+        if (lostActive && (!recovered || recovered.id === id)) {
+          showError(recovered
+            ? '服务器已找不到该批次，可能已结束或过期。已接收的成功结果仍可下载；请重新导入未完成的账号。'
+            : '服务器已找不到该批次，可能已结束或过期。当前浏览器没有可恢复的结果，请重新导入账号。');
+        }
+        retry = !!recovered && activeStates.has(recovered.status);
+        return;
       }
       networkNotice = true;
       showError(error.status === 403 || error.status === 429 ? error.message : `${error.message} 正在重新获取批次状态。`);
@@ -557,6 +645,35 @@ import { getBrowserResults, collectBatchResults, isBatchCollected, resetResultCo
   }
 
   byId('accounts-text').addEventListener('input', () => { updateCount(); byId('file-name').textContent = ''; updateControls(); });
+  byId('skip-email-verification').addEventListener('change', async () => {
+    const setting = byId('skip-email-verification');
+    if (setting.disabled) return;
+    if (!batch || !activeStates.has(batch.status)) { updateControls(); return; }
+    const id = batch.id;
+    const previous = batch.skip_email_verification === true;
+    const enabled = setting.checked;
+    savingSkipSetting = true;
+    pollRequest += 1;
+    showError('');
+    updateControls();
+    try {
+      const updated = await jsonRequest(`/api/batches/${encodeURIComponent(id)}/settings`, { method: 'POST', body: JSON.stringify({ skip_email_verification: enabled }) });
+      if (batch?.id === id && !clearing) {
+        pollRequest += 1;
+        setting.checked = updated.skip_email_verification === true;
+        render(updated);
+      }
+    } catch (error) {
+      if (batch?.id === id && !clearing) {
+        setting.checked = previous;
+        showError(error.message);
+      }
+    } finally {
+      savingSkipSetting = false;
+      updateControls();
+      schedulePoll(0);
+    }
+  });
   byId('clear-accounts-button').addEventListener('click', () => {
     if (byId('clear-accounts-button').disabled || byId('credentials-fields').disabled) return;
     byId('accounts-text').value = '';
@@ -625,7 +742,7 @@ import { getBrowserResults, collectBatchResults, isBatchCollected, resetResultCo
     hideRt();
     showError('');
     if (!(await confirmProxy()) || !canSubmitBatch()) return;
-    const body = { accounts_text: byId('accounts-text').value, timeout: 180, concurrency: Number(byId('concurrency').value) };
+    const body = { accounts_text: byId('accounts-text').value, timeout: 180, concurrency: Number(byId('concurrency').value), skip_email_verification: byId('skip-email-verification').checked === true };
     if (byId('proxy').value.trim()) body.proxy = byId('proxy').value.trim();
     submitting = true;
     networkNotice = false;
@@ -648,7 +765,7 @@ import { getBrowserResults, collectBatchResults, isBatchCollected, resetResultCo
   });
 
   byId('cancel-button').addEventListener('click', async () => {
-    if (!batch || cancelling || batch.status === 'cancelling') return;
+    if (!batch || cancelling || savingSkipSetting || batch.status === 'cancelling') return;
     const id = batch.id;
     cancelling = true;
     updateControls();
@@ -664,7 +781,7 @@ import { getBrowserResults, collectBatchResults, isBatchCollected, resetResultCo
     byId(id).addEventListener('click', () => downloadLocal(kind, byId(id)));
   }
   byId('clear-browser-results')?.addEventListener('click', async () => {
-    if (clearing || submitting || confirmingProxy) return;
+    if (clearing || submitting || confirmingProxy || savingSkipSetting) return;
     clearing = true; clearTimeout(pollTimer); clearTimeout(initializeTimer); pollRequest += 1;
     hideRt(); clearActiveJobs(); resetResultCollection(); render(null);
     initializing = false;
