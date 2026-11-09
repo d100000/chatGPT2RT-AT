@@ -28,7 +28,7 @@
 
 | 工具 | 可以做什么 | 入口 / 文档 |
 | --- | --- | --- |
-| **Token 获取** | 批量导入、并发登录、验证码交互、跳过邮箱验证账号、查看与复制 RT；导出原始 JSON、CPA、Sub2API、ZIP 和 RT 文本 | `/` · [提取指南](docs/TOKEN-GUIDE.md) |
+| **Token 获取** | 1～10 并发、超量自动分组、验证码交互、跳过邮箱验证账号、查看与复制 RT；导出原始 JSON、CPA、Sub2API、ZIP 和 RT 文本 | `/` · [提取指南](docs/TOKEN-GUIDE.md) |
 | **格式转换** | CPA ↔ Sub2API 双向转换；支持多文件、目录和粘贴 JSON，在浏览器内解析、预览和打包 | `/converter` · [字段映射](docs/REFERENCE.md#转换功能与字段映射) |
 | **IP 检测** | 查询浏览器出口或指定公网 IP，查看 IPOK 返回的归属地、风险信号与来源证据 | `/network` · [检测说明](docs/REFERENCE.md#ip-纯净度检测) |
 | **GPT 能力评测** | 鹈鹕骑自行车 SVG 单次、批量、定时与持续测试；人工评分、可选 AI 看图评分、历史对比与报告导出 | `/pelican` · [评测指南](docs/PELICAN.md) |
@@ -82,7 +82,7 @@ python -m venv .venv
 <a id="账号输入格式"></a>
 
 1. 粘贴账号列表，或导入 UTF-8 `.txt` 文件，每行一个账号。
-2. 选择同时处理的账号数：默认 **2**，可选 **1～3**；每批最多 **1,000 个账号、2 MiB 文本**。
+2. 选择同时处理的账号数：默认 **2**，可选 **1～10**。网页总输入不超过 **2 MiB**；超过 **1,000 条**自动分组，每组最多 1,000 条。
 3. 按需填写统一代理，点击开始，并在确认窗口核对连接方式。
 4. 查看各账号状态；遇到邮箱验证码时，输入验证码或跳过该账号。
 5. 成功结果接收到浏览器后，即可查看 RT 或下载文件，无需等待整批结束。
@@ -94,7 +94,9 @@ user1@example.com----YOUR_PASSWORD----YOUR_BASE32_SECRET
 user2@example.com----YOUR_PASSWORD----YOUR_BASE32_SECRET
 ```
 
-三个字段均不能为空。2FA 支持 Base32 密钥或 `otpauth://totp/` URI，使用 SHA1、6 位动态码和 30 秒周期。开始前会检查全部行，格式错误、无效密钥或重复邮箱会阻止整批启动。更多规则见 [账号输入格式](docs/REFERENCE.md#账号输入格式)。
+三个字段均不能为空。2FA 支持 Base32 密钥或 `otpauth://totp/` URI，使用 SHA1、6 位动态码和 30 秒周期。分组前检查基础格式和跨组重复邮箱；服务端逐组完整校验，当前组有无效密钥等错误时不会启动该组。更多规则见 [账号输入格式](docs/REFERENCE.md#账号输入格式)。
+
+自动分组会等待当前组结束、结果完整接收并确认后，再提交下一组。已完成组提供独立下载，不会被下一组覆盖。网页仍受每会话每小时 1,000 个账号等额度约束，提交被限流时显示倒计时并等待；停止计划会取消当前组并清除尚未提交的账号。后续账号和分组归档只保留在当前页面内存，刷新或关闭页面不能续跑；长时间运行可使用下方的本地分组 CLI。
 
 <a id="并发验证码和限流"></a>
 ### 等待邮箱验证码时跳过账号
@@ -142,6 +144,7 @@ Token 页的统一代理只影响 Python 登录请求，**浏览器检测出口�
 | --- | --- |
 | 网页登录凭据 | 由服务端在内存中临时处理；密码和 2FA 密钥不写入浏览器持久化存储或 Token 结果文件 |
 | 网页 Token 结果 | 按签名会话分区缓存到浏览器 `localStorage`，有效期 30 分钟，同会话标签页可共享；下载由浏览器生成 |
+| 网页已完成分组归档 | 当前页面内存中保留，最多 20 MiB；计划结束或停止后 30 分钟清除，刷新或关闭页面即丢失，需按组下载 |
 | 服务端 Token 临时结果 | 浏览器确认接收后清除；未交接的已结束结果最多保留 10 分钟，活动工作空间闲置 10 分钟后取消清理 |
 | 手动导入的转换文件 | 只在当前页面内存中处理，不上传、不写入浏览器存储；刷新后需重新导入 |
 | IP 检测与声明记忆 | IP 资料和冷却时间使用会话缓存；公告确认时间独立保存，7 天内免提示 |
@@ -154,7 +157,7 @@ Token 页的统一代理只影响 Python 登录请求，**浏览器检测出口�
 
 <a id="本站请求防护"></a>
 
-任务操作均校验签名浏览器会话归属，并检查 Host、Origin、CSRF 和请求频率。HTTP 429 按 `Retry-After` 等待，页面不会自动重提密码或验证码。服务不包含公网用户登录体系，也不能通过增加独立进程共享当前任务。详见 [安全策略](SECURITY.md)、[数据与运行边界](docs/REFERENCE.md#数据保存与运行限制)及 [迁移说明](docs/MAINTAINERS.md#privacy-migration)。
+任务操作均校验签名浏览器会话归属，并检查 Host、Origin、CSRF 和请求频率。HTTP 429 按 `Retry-After` 等待；自动分组只重试被限流拒绝、尚未启动的分组，账号认证失败或提交状态不确定时不自动重试，也不自动重提人工验证码。服务不包含公网用户登录体系，也不能通过增加独立进程共享当前任务。详见 [安全策略](SECURITY.md)、[数据与运行边界](docs/REFERENCE.md#数据保存与运行限制)及 [迁移说明](docs/MAINTAINERS.md#privacy-migration)。
 
 <a id="token-types"></a>
 ## Token 术语
@@ -170,13 +173,21 @@ Token 页的统一代理只影响 Python 登录请求，**浏览器检测出口�
 
 ## 命令行与 Python 接口
 
-CLI 和公开 Python API 每次处理单个账号。无需网页时，安装可使用 `.venv/bin/python -m pip install .`。
+默认 CLI 和公开 Python API 每次处理单个账号；本地分组 CLI 支持一次读取账号文本并顺序执行多个分组。无需网页时，安装可使用 `.venv/bin/python -m pip install .`。
 
 ```bash
 .venv/bin/python -m rt_extractor --email you@example.com --output tokens.json
 ```
 
 命令行会隐藏密码与 2FA 输入；输出默认不覆盖已有文件。Python 提供 `extract_tokens(...)` 返回内存结果，或 `extract_and_save(...)` 显式保存。无交互 JSON 输入、环境变量、异步回调与错误类型见 [CLI / Python 完整说明](docs/REFERENCE.md#命令行与-python-接口)。
+
+长时间批量提取可使用本地分组命令。`accounts.txt` 与网页使用相同的三字段格式，输出目录必须尚不存在：
+
+```bash
+.venv/bin/python -m rt_extractor.batch_cli --input accounts.txt --output-dir ./private-results/run-001 --concurrency 10 --skip-email-verification
+```
+
+全部输入先校验，每 1,000 条分一组，上一组完成后继续下一组。每条成功结果立即以私有文件权限保存，另生成每组下载文件和不含凭据的 `progress.json` / `report.json`；这些本地文件不受浏览器 30 分钟缓存期限影响。失败账号不会自动重试。详见 [本地分组提取](docs/REFERENCE.md#本地分组提取)。
 
 ## 文档导航
 

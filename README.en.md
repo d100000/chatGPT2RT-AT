@@ -73,7 +73,7 @@ The server binds to loopback and checks Host, Origin and session-bound CSRF. Sig
    user@example.com----YOUR_PASSWORD----YOUR_BASE32_SECRET
    ```
 
-2. Choose **1–3 concurrent accounts**, with **2** selected by default. A batch accepts up to **1,000 accounts and 2 MiB of input text**.
+2. Choose **1–10 concurrent accounts**, with **2** selected by default. Web input is limited to **2 MiB**; more than **1,000 accounts** are automatically split into groups of up to 1,000.
 3. If needed, enter a shared proxy under connection settings, then start the batch.
 4. Follow each account's progress. Enter a requested email code, skip that account, or enable automatic email-verification skipping.
 5. Once a successful result reaches this browser, view or copy RT and download the account's original JSON or CPA JSON.
@@ -95,6 +95,8 @@ The **Skip email verification** switch is **off by default**. Turn it on before 
 ### Results and exports
 
 Downloads use successful results **already received by the current browser**; they do not require the entire batch to finish. Failed, skipped and unfinished accounts do not contribute Token files. The original-result ZIP also includes a manifest of account statuses.
+
+Automatic grouping waits for each group to finish and for its complete results to be acknowledged before submitting the next. Each completed group keeps its own download links. Existing web quotas still apply, including 1,000 accounts per session per hour; a rejected submission waits for `Retry-After`. Pending credentials and group archives stay in the current page's memory, so reloading or closing the page cannot resume the plan. Archives are capped at 20 MiB and expire 30 minutes after completion or stopping. Use the grouped CLI for long local runs with persistent files.
 
 Results and exports retain input order even when accounts finish in a different order. Cancelling a batch preserves received successes. Use **End task and clear** to stop the current session's extraction and clear its browser results.
 
@@ -163,7 +165,15 @@ For unattended use, create a private local input file and run:
 .venv/bin/python -m rt_extractor --input account.json --output tokens.json --non-interactive
 ```
 
-The Python API exposes async `extract_tokens(...)` and `extract_and_save(...)`, plus `save_tokens(...)`. CLI and public API calls process one account at a time; the email-skip switch belongs to the web batch workflow. Full input examples, environment variables, callbacks and error types are in [CLI and Python reference](docs/REFERENCE.md#命令行与-python-接口) (Chinese).
+The Python API exposes async `extract_tokens(...)` and `extract_and_save(...)`, plus `save_tokens(...)`. These calls and the default CLI process one account at a time. Full input examples, environment variables, callbacks and error types are in [CLI and Python reference](docs/REFERENCE.md#命令行与-python-接口) (Chinese).
+
+For a long local batch, use the grouped CLI with the same three-field text format as the web tool and a new output directory:
+
+```bash
+.venv/bin/python -m rt_extractor.batch_cli --input accounts.txt --output-dir ./private-results/run-001 --concurrency 10 --skip-email-verification
+```
+
+It validates the complete input, splits it into groups of up to 1,000 accounts, and runs each group in order. Successful raw, CPA and Sub2API files are saved immediately with private permissions; group exports and credential-free progress reports are also written locally. These files do not expire with the browser cache. Failed accounts are not retried automatically. See [local grouped extraction](docs/REFERENCE.md#本地分组提取) (Chinese).
 
 ## Documentation
 
